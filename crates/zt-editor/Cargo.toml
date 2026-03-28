@@ -1,0 +1,9 @@
+[package]
+name = "zt-editor"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+zt-core = { workspace = true }
+ropey = { workspace = true }
+anyhow = { workspace = true }

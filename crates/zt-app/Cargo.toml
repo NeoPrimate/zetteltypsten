@@ -1,0 +1,20 @@
+[package]
+name = "zt-app"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "zetteltypsten"
+path = "src/main.rs"
+
+[dependencies]
+zt-core = { workspace = true }
+zt-ui = { workspace = true }
+zt-typst = { workspace = true }
+gpui = { workspace = true }
+gpui-component = { workspace = true }
+typst-assets = { workspace = true }
+anyhow = { workspace = true }
+log = { workspace = true }
+env_logger = { workspace = true }
+gpui-component-assets = "0.5.1"

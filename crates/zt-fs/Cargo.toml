@@ -1,0 +1,11 @@
+[package]
+name = "zt-fs"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+zt-core = { workspace = true }
+notify = { workspace = true }
+walkdir = { workspace = true }
+anyhow = { workspace = true }
+log = { workspace = true }

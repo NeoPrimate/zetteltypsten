@@ -1,0 +1,24 @@
+[package]
+name = "zt-ui"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+zt-core = { workspace = true }
+zt-typst = { workspace = true }
+zt-fs = { workspace = true }
+zt-editor = { workspace = true }
+zt-index = { workspace = true }
+zt-book = { path = "../zt-book" }
+zt-db = { path = "../zt-db" }
+gpui = { workspace = true }
+gpui-component = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+log = { workspace = true }
+typst = { workspace = true }
+typst-syntax = { workspace = true }
+typst-render = { workspace = true }
+ttf-parser = "0.25"
+walkdir = { workspace = true }

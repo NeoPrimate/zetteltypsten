@@ -1,0 +1,12 @@
+[package]
+name = "zt-index"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+zt-core = { workspace = true }
+zt-fs = { workspace = true }
+tantivy = { workspace = true }
+petgraph = { workspace = true }
+anyhow = { workspace = true }
+log = { workspace = true }
