@@ -42,6 +42,11 @@ impl Workspace {
             return self.render_book_right_panel(cx);
         }
 
+        // ── PDF tab: document list + structure ───────────────────────────────
+        if self.active_tab == ActiveTab::Pdf {
+            return self.render_pdf_right_panel(cx);
+        }
+
         let text_color = theme::text();
         let subtext = theme::subtext0();
         let surface0 = theme::surface0();
@@ -520,18 +525,19 @@ impl Workspace {
                 format!("{} {}", ch.section_string(), ch.title)
             };
 
-            // ── Part: bold section divider ────────────────────────────────────
+            // ── Part: bold section divider (unnumbered) ─────────────────────
             if ch.is_part {
+                let part_label = ch.title.clone(); // no section number for parts
                 let mut part_row = div()
                     .id(item_id.clone())
                     .w_full()
                     .pl(px(indent_px))
                     .pr(px(8.0))
-                    .pt(px(10.0))
+                    .pt(px(14.0))
                     .pb(px(4.0))
-                    .text_xs()
+                    .text_sm()
                     .font_weight(FontWeight::BOLD)
-                    .text_color(theme::subtext0())
+                    .text_color(theme::text())
                     .cursor_pointer()
                     .flex()
                     .flex_row()
@@ -546,10 +552,10 @@ impl Workspace {
                             )
                         );
                     } else {
-                        part_row = part_row.child(label.clone());
+                        part_row = part_row.child(part_label.clone());
                     }
                 } else {
-                    part_row = part_row.child(label.clone());
+                    part_row = part_row.child(part_label.clone());
                 }
 
                 // Drag: reorder parts
@@ -909,6 +915,153 @@ impl Workspace {
                 })
                 .into_any_element()
         );
+    }
+
+    // ── PDF right panel ───────────────────────────────────────────────────────
+
+    fn render_pdf_right_panel(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let text_color = theme::text();
+        let subtext = theme::subtext0();
+        let surface0 = theme::surface0();
+
+        let doc_list = self.pdf_doc_list.clone();
+        let active_doc = self.active_pdf_doc.clone();
+
+        // ── Document list ────────────────────────────────────────────────────
+        let mut doc_rows: Vec<AnyElement> = doc_list
+            .iter()
+            .map(|name| {
+                let is_active = name == &active_doc;
+                let label = name.trim_end_matches(".typ").to_string();
+                let name_click = name.clone();
+                let ws = cx.entity().clone();
+
+                div()
+                    .id(SharedString::from(format!("pdf-doc-{name}")))
+                    .w_full()
+                    .px(px(12.0))
+                    .py(px(4.0))
+                    .text_sm()
+                    .cursor_pointer()
+                    .text_color(if is_active { text_color } else { subtext })
+                    .bg(if is_active { theme::surface0() } else { gpui::transparent_black() })
+                    .hover(|s| s.bg(theme::surface0()))
+                    .on_click(move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
+                        ws.update(cx, |ws, cx| {
+                            ws.load_pdf_doc(&name_click, window, cx);
+                        });
+                    })
+                    .child(label)
+                    .into_any_element()
+            })
+            .collect();
+
+        // "+" button to create new document
+        let ws_add = cx.entity().clone();
+        doc_rows.push(
+            div()
+                .id("pdf-doc-new")
+                .w_full()
+                .px(px(12.0))
+                .py(px(4.0))
+                .text_sm()
+                .cursor_pointer()
+                .text_color(subtext)
+                .hover(|s| s.text_color(text_color))
+                .on_click(move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
+                    ws_add.update(cx, |ws, cx| {
+                        let Some(ref root) = ws.vault_root else { return };
+                        let doc_dir = root.join(".zetteltypsten/documents");
+                        let _ = std::fs::create_dir_all(&doc_dir);
+                        let name = (1usize..)
+                            .map(|i| format!("document-{i}.typ"))
+                            .find(|n| !doc_dir.join(n).exists())
+                            .unwrap_or_else(|| "document.typ".into());
+                        let _ = std::fs::write(doc_dir.join(&name), "");
+                        ws.scan_pdf_docs();
+                        ws.load_pdf_doc(&name, window, cx);
+                    });
+                })
+                .child("+ New Document")
+                .into_any_element(),
+        );
+
+        Some(
+            div()
+                .flex()
+                .flex_col()
+                .h_full()
+                .w(px(self.right_sidebar_width))
+                .flex_shrink_0()
+                .bg(theme::mantle())
+                .child(div().w_full().h(px(theme::TITLEBAR_H)).bg(theme::surface0()))
+                .child(
+                    div()
+                        .w_full()
+                        .px(px(12.0))
+                        .py(px(6.0))
+                        .flex()
+                        .items_center()
+                        .gap(px(6.0))
+                        .border_b_1()
+                        .border_color(surface0)
+                        .child(Icon::new(IconName::File).size_4().text_color(subtext))
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(text_color)
+                                .child("Documents"),
+                        ),
+                )
+                .child(
+                    div()
+                        .id("pdf-doc-list-scroll")
+                        .flex_1()
+                        .overflow_y_scroll()
+                        .py(px(4.0))
+                        .children(doc_rows),
+                )
+                .child({
+                    let ws_export = cx.entity().clone();
+                    div()
+                        .w_full()
+                        .px(px(12.0))
+                        .py(px(8.0))
+                        .border_t_1()
+                        .border_color(surface0)
+                        .child(
+                            div()
+                                .id("pdf-export-btn")
+                                .w_full()
+                                .px(px(12.0))
+                                .py(px(6.0))
+                                .rounded(px(4.0))
+                                .bg(theme::blue())
+                                .text_sm()
+                                .text_color(theme::crust())
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .cursor_pointer()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .hover(|s| s.bg(theme::sapphire()))
+                                .on_click(move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
+                                    ws_export.update(cx, |ws, cx| {
+                                        if let Some(ref editor) = ws.pdf_editor {
+                                            editor.update(cx, |e, cx| {
+                                                if let Some(path) = e.export_pdf(cx) {
+                                                    tracing::info!("PDF exported to {}", path.display());
+                                                }
+                                            });
+                                        }
+                                    });
+                                })
+                                .child("Export PDF"),
+                        )
+                })
+                .into_any_element(),
+        )
     }
 }
 

@@ -21,6 +21,8 @@ pub struct Editor {
     pages: Vec<Frame>,
     vault_root: std::path::PathBuf,
     rel_path: String,
+    /// If set, save to this path instead of rel_path (for PDF docs with virtual paths).
+    save_path: Option<String>,
     subscribed: bool,
     pending_compile: Option<Task<()>>,
     world: std::sync::Arc<std::sync::Mutex<zt_typst::world::ZettelWorld>>,
@@ -59,10 +61,16 @@ impl Editor {
             pages,
             vault_root,
             rel_path,
+            save_path: None,
             subscribed: false,
             pending_compile: None,
             world,
         }
+    }
+
+    /// Set an alternate save path (for PDF documents with virtual compilation paths).
+    pub fn set_save_path(&mut self, path: String) {
+        self.save_path = Some(path);
     }
 
     fn compile_with_world(
@@ -133,10 +141,65 @@ impl Editor {
 
     pub fn save_file(&mut self, cx: &mut Context<Self>) {
         let source = self.input.read(cx).value().to_string();
-        let path = self.vault_root.join(&self.rel_path);
+        let rel = self.save_path.as_deref().unwrap_or(&self.rel_path);
+        let path = self.vault_root.join(rel);
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
         if let Err(e) = std::fs::write(&path, &source) {
             tracing::error!("Failed to save {}: {}", path.display(), e);
         }
+    }
+
+    /// Export the current document as PDF. Returns the output path on success.
+    pub fn export_pdf(&self, cx: &Context<Self>) -> Option<std::path::PathBuf> {
+        use typst::foundations::Smart;
+
+        let source = self.input.read(cx).value().to_string();
+        let world = self.world.lock().unwrap();
+
+        let doc = match typst::compile::<typst::layout::PagedDocument>(&*world).output {
+            Ok(doc) => doc,
+            Err(errs) => {
+                for e in errs.iter().take(3) {
+                    tracing::error!("PDF export compile error: {e:?}");
+                }
+                return None;
+            }
+        };
+
+        let options = typst_pdf::PdfOptions {
+            ident: Smart::Auto,
+            timestamp: None,
+            page_ranges: None,
+            standards: typst_pdf::PdfStandards::default(),
+            tagged: true,
+        };
+
+        let pdf_bytes = match typst_pdf::pdf(&doc, &options) {
+            Ok(bytes) => bytes,
+            Err(errs) => {
+                for e in errs.iter().take(3) {
+                    tracing::error!("PDF export error: {e:?}");
+                }
+                return None;
+            }
+        };
+
+        // Write to .zetteltypsten/exports/<name>.pdf
+        let export_dir = self.vault_root.join(".zetteltypsten/exports");
+        let _ = std::fs::create_dir_all(&export_dir);
+        let stem = std::path::Path::new(&self.rel_path)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("document");
+        let pdf_path = export_dir.join(format!("{stem}.pdf"));
+        if let Err(e) = std::fs::write(&pdf_path, &pdf_bytes) {
+            tracing::error!("Failed to write PDF: {}", e);
+            return None;
+        }
+        tracing::info!("Exported PDF to {}", pdf_path.display());
+        Some(pdf_path)
     }
 
     fn schedule_recompile(&mut self, cx: &mut Context<Self>) {

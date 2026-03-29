@@ -1,19 +1,23 @@
 use crate::file_ops;
 use crate::theme;
-use crate::typst_canvas::{self, LinkRegion, PT_TO_PX};
+use crate::typst_canvas::{self, PT_TO_PX};
 use gpui::*;
 use gpui_component::input::{InputEvent, InputState, TabSize};
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use typst::layout::Frame;
 use typst::model::Destination;
 use zt_index::NoteInfo;
+use zt_typst::vault_doc::VaultDocument;
 
 actions!(note_view, [ToggleEditMode]);
 
 pub enum NoteViewEvent {
+    /// Navigate to a different note.
     OpenFile(String),
+    /// Navigate to a specific position within a note (cross-note ref click).
+    /// `y_pt` is the absolute Y in the vault document (Typst points).
+    NavigateToLocation { note_path: String, y_pt: f32 },
     Recompiled,
     Renamed { old_rel: String, new_rel: String },
     /// A draft note was given a name and the file was created on disk.
@@ -25,9 +29,10 @@ impl EventEmitter<NoteViewEvent> for NoteView {}
 pub struct NoteView {
     pub input: Entity<InputState>,
     pub title_input: Entity<InputState>,
+    /// Frames to render — the slice of the vault document for this note.
     pages: Vec<Frame>,
-    /// Link bounds (in window coords, updated each paint) → URL string.
-    link_store: Arc<Mutex<Vec<(Bounds<Pixels>, String)>>>,
+    /// Link destinations collected during paint, for click handling.
+    link_store: Arc<Mutex<Vec<(Bounds<Pixels>, LinkTarget)>>>,
     pub edit_mode: bool,
     vault_root: PathBuf,
     pub rel_path: String,
@@ -40,7 +45,19 @@ pub struct NoteView {
     subscribed: bool,
     title_subscribed: bool,
     pending_compile: Option<Task<()>>,
-    world: Arc<Mutex<zt_typst::world::ZettelWorld>>,
+    /// Shared vault-wide compiled document.
+    vault_doc: Arc<Mutex<VaultDocument>>,
+    /// Handle for programmatic scrolling of the view-mode canvas.
+    scroll_handle: ScrollHandle,
+}
+
+/// A link target collected during rendering.
+#[derive(Clone)]
+pub enum LinkTarget {
+    /// Native Typst location (cross-note ref resolved by compiler).
+    Location(typst::introspection::Location),
+    /// External URL string.
+    Url(String),
 }
 
 impl NoteView {
@@ -48,6 +65,7 @@ impl NoteView {
         vault_root: PathBuf,
         rel_path: String,
         source: String,
+        vault_doc: Arc<Mutex<VaultDocument>>,
         window: &mut Window,
         cx: &mut App,
     ) -> Self {
@@ -60,7 +78,7 @@ impl NoteView {
                 .indent_guides(true)
                 .tab_size(TabSize { tab_size: 2, hard_tabs: false })
                 .soft_wrap(true)
-                .default_value(source.clone())
+                .default_value(source)
         });
 
         let stem = Path::new(&rel_path)
@@ -70,12 +88,8 @@ impl NoteView {
             .to_string();
         let title_input = cx.new(|cx| InputState::new(window, cx).default_value(stem));
 
-        let mut world = zt_typst::world::ZettelWorld::new(vault_root.clone(), &rel_path);
-        let preamble = build_preamble(&vault_root, &rel_path, &source);
-        let full_source = format!("{preamble}{source}");
-        world.set_source(&rel_path, full_source);
-        let (pages, note_info) = compile_note(&world);
-        let world = Arc::new(Mutex::new(world));
+        // Extract this note's frames and info from the vault document
+        let (pages, note_info) = extract_note_slice(&vault_doc, &rel_path);
 
         Self {
             input,
@@ -91,13 +105,20 @@ impl NoteView {
             subscribed: false,
             title_subscribed: false,
             pending_compile: None,
-            world,
+            vault_doc,
+            scroll_handle: ScrollHandle::new(),
         }
     }
 
     /// Create an unnamed draft note. The file is NOT written to disk until the
     /// user provides a name in the title field and presses Enter.
-    pub fn new_draft(vault_root: PathBuf, draft_dir: String, window: &mut Window, cx: &mut App) -> Self {
+    pub fn new_draft(
+        vault_root: PathBuf,
+        draft_dir: String,
+        vault_doc: Arc<Mutex<VaultDocument>>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Self {
         let input = cx.new(|cx| {
             InputState::new(window, cx)
                 .code_editor("typst")
@@ -110,15 +131,7 @@ impl NoteView {
         });
 
         let title_input = cx.new(|cx| InputState::new(window, cx));
-        // Focus the title field immediately so the user can start typing the name.
         title_input.update(cx, |s, cx| s.focus(window, cx));
-
-        // Use a placeholder rel-path for the ZettelWorld — it won't touch the disk
-        // because we set the source manually to an empty string.
-        let placeholder = "__new__.typ";
-        let mut world = zt_typst::world::ZettelWorld::new(vault_root.clone(), placeholder);
-        world.set_source(placeholder, String::new());
-        let world = Arc::new(Mutex::new(world));
 
         Self {
             input,
@@ -134,7 +147,8 @@ impl NoteView {
             subscribed: false,
             title_subscribed: false,
             pending_compile: None,
-            world,
+            vault_doc,
+            scroll_handle: ScrollHandle::new(),
         }
     }
 
@@ -148,9 +162,6 @@ impl NoteView {
             }
         };
 
-        let preamble = build_preamble(&self.vault_root, rel_path, &source);
-        let full_source = format!("{preamble}{source}");
-
         self.rel_path = rel_path.to_string();
         self.input.update(cx, |s, cx| s.set_value(&source, window, cx));
 
@@ -161,13 +172,10 @@ impl NoteView {
             .to_string();
         self.title_input.update(cx, |s, cx| s.set_value(&stem, window, cx));
 
-        let mut world = self.world.lock().unwrap();
-        world.set_main(rel_path);
-        world.set_source(rel_path, full_source);
-        let (pages, note_info) = compile_note(&world);
+        // Extract this note's slice from the vault document
+        let (pages, note_info) = extract_note_slice(&self.vault_doc, rel_path);
         self.pages = pages;
         self.note_info = note_info;
-        drop(world);
 
         cx.notify();
     }
@@ -179,21 +187,26 @@ impl NoteView {
         }
 
         if self.is_draft {
-            // Create the file on disk for the first time.
             let new_filename = format!("{}.typ", new_name);
             match file_ops::create_file(&self.vault_root, &self.draft_dir, &new_filename) {
                 Ok(new_rel) => {
                     self.is_draft = false;
                     self.rel_path = new_rel.clone();
-                    // Point the world at the real path so auto-save works correctly.
+                    // Write editor content to the new file
                     let source = self.input.read(cx).value().to_string();
+                    let path = self.vault_root.join(&new_rel);
+                    let _ = std::fs::write(&path, &source);
+                    // Add to vault document and recompile
                     {
-                        let mut world = self.world.lock().unwrap();
-                        world.set_main(&new_rel);
-                        let preamble = build_preamble(&self.vault_root, &new_rel, &source);
-                        world.set_source(&new_rel, format!("{preamble}{source}"));
+                        let mut vd = self.vault_doc.lock().unwrap();
+                        vd.add_note(&new_rel);
+                        vd.recompile();
                     }
+                    let (pages, info) = extract_note_slice(&self.vault_doc, &new_rel);
+                    self.pages = pages;
+                    self.note_info = info;
                     cx.emit(NoteViewEvent::Created(new_rel));
+                    cx.notify();
                 }
                 Err(e) => tracing::error!("Create note failed: {e}"),
             }
@@ -213,9 +226,40 @@ impl NoteView {
         match file_ops::rename_file(&self.vault_root, &old_rel, &new_filename) {
             Ok(new_rel) => {
                 self.rel_path = new_rel.clone();
+                // Update vault document
+                {
+                    let mut vd = self.vault_doc.lock().unwrap();
+                    vd.rename_note(&old_rel, &new_rel);
+                    vd.recompile();
+                }
                 cx.emit(NoteViewEvent::Renamed { old_rel, new_rel });
             }
             Err(e) => tracing::error!("Rename failed: {e}"),
+        }
+    }
+
+    /// Scroll to an absolute Y position (in Typst points) within the vault document.
+    /// The position is converted to note-relative coordinates.
+    pub fn scroll_to_y_abs(&mut self, y_abs_pt: f32) {
+        let vd = self.vault_doc.lock().unwrap();
+        let Some(boundary) = vd.note_boundary(&self.rel_path) else { return };
+        let y_relative = y_abs_pt - boundary.y_start_pt;
+        drop(vd);
+        if y_relative >= 0.0 {
+            let scroll_y = (y_relative * PT_TO_PX - 20.0).max(0.0);
+            self.scroll_handle.set_offset(point(px(0.0), px(-scroll_y)));
+        }
+    }
+
+    /// Explicitly save the current editor content to disk.
+    pub fn save_file(&self, cx: &Context<Self>) {
+        if self.is_draft || self.rel_path.is_empty() {
+            return;
+        }
+        let source = self.input.read(cx).value().to_string();
+        let path = self.vault_root.join(&self.rel_path);
+        if let Err(e) = std::fs::write(&path, &source) {
+            tracing::error!("Failed to save {}: {}", path.display(), e);
         }
     }
 
@@ -225,7 +269,7 @@ impl NoteView {
         let source = self.input.read(cx).value().to_string();
         let rel_path = self.rel_path.clone();
         let vault_root = self.vault_root.clone();
-        let world = self.world.clone();
+        let vault_doc = self.vault_doc.clone();
         let is_draft = self.is_draft;
 
         let bg = cx.background_executor().clone();
@@ -234,7 +278,7 @@ impl NoteView {
 
             let (new_pages, new_info) = bg
                 .spawn(async move {
-                    // Skip auto-save for draft notes (no file on disk yet).
+                    // Auto-save to disk
                     if !is_draft && !rel_path.is_empty() {
                         let full_path = vault_root.join(&rel_path);
                         if let Err(e) = std::fs::write(&full_path, &source) {
@@ -244,11 +288,18 @@ impl NoteView {
                     if rel_path.is_empty() {
                         return (Vec::new(), NoteInfo::default());
                     }
-                    let preamble = build_preamble(&vault_root, &rel_path, &source);
-                    let full_source = format!("{preamble}{source}");
-                    let mut w = world.lock().unwrap();
-                    w.set_source(&rel_path, full_source);
-                    compile_note(&w)
+
+                    // Update source in vault doc and recompile
+                    let mut vd = vault_doc.lock().unwrap();
+                    vd.update_note_source(&rel_path, source);
+                    vd.recompile();
+
+                    // Extract this note's frame and info
+                    let pages: Vec<Frame> = vd.note_frame(&rel_path).into_iter().collect();
+                    let info = vd.note_info(&rel_path);
+                    drop(vd);
+
+                    (pages, info)
                 })
                 .await;
 
@@ -268,52 +319,26 @@ impl NoteView {
     }
 }
 
-/// Scan vault for all `<label>` declarations; returns {label → rel_path}.
-fn scan_vault_labels(root: &Path) -> HashMap<String, String> {
-    let mut map = HashMap::new();
-    for entry in walkdir::WalkDir::new(root).max_depth(10).into_iter().filter_map(|e| e.ok()) {
-        if entry.path().extension().is_some_and(|e| e == "typ") {
-            let rel = entry
-                .path()
-                .strip_prefix(root)
-                .unwrap_or(entry.path())
-                .to_string_lossy()
-                .into_owned();
-            if let Ok(src) = std::fs::read_to_string(entry.path()) {
-                for label in zt_typst::compiler::extract_local_labels(&src) {
-                    map.entry(label).or_insert(rel.clone());
-                }
-            }
-        }
-    }
-    map
+// ─────────────────────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Extract a note's frame and NoteInfo from the vault document.
+fn extract_note_slice(
+    vault_doc: &Arc<Mutex<VaultDocument>>,
+    rel_path: &str,
+) -> (Vec<Frame>, NoteInfo) {
+    let vd = vault_doc.lock().unwrap();
+    let frame = vd.note_frame(rel_path);
+    let info = vd.note_info(rel_path);
+    let pages = frame.into_iter().collect();
+    (pages, info)
 }
 
-/// Build the cross-note ref preamble for a given source file.
-fn build_preamble(vault_root: &Path, rel_path: &str, source: &str) -> String {
-    let label_map = scan_vault_labels(vault_root);
-    let local_labels = zt_typst::compiler::extract_local_labels(source);
-    let empty: HashMap<String, String> = HashMap::new();
-    let ref_preamble =
-        zt_typst::compiler::build_ref_preamble(&label_map, &local_labels, &empty, &empty);
-    // Catppuccin Macchiato: text = #cad3f5, background = #24273a
-    format!(
-        "#set text(fill: rgb(\"#cad3f5\"))\n#set page(fill: rgb(\"#24273a\"))\n{ref_preamble}"
-    )
-}
 
-/// Compile and return page frames plus extracted semantic info.
-fn compile_note(world: &zt_typst::world::ZettelWorld) -> (Vec<Frame>, NoteInfo) {
-    let result = typst::compile::<typst::layout::PagedDocument>(world);
-    match result.output {
-        Ok(doc) => {
-            let info = zt_index::compiled::extract_from_compiled(&doc);
-            let frames = doc.pages.iter().map(|p| p.frame.clone()).collect();
-            (frames, info)
-        }
-        Err(_) => (Vec::new(), NoteInfo::default()),
-    }
-}
+// ─────────────────────────────────────────────────────────────────────────────
+// Render
+// ─────────────────────────────────────────────────────────────────────────────
 
 impl Render for NoteView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -349,7 +374,7 @@ impl Render for NoteView {
             .detach();
         }
 
-        // Title bar — always visible above both edit and view modes.
+        // Title bar
         let title_bar = div()
             .w_full()
             .px(px(24.0))
@@ -387,13 +412,16 @@ impl Render for NoteView {
         } else {
             let pages = self.pages.clone();
             let link_store = self.link_store.clone();
+            let vault_doc_for_links = self.vault_doc.clone();
+            let note_rel = self.rel_path.clone();
 
-            let margin = 16.0_f32;
+            let pad = 16.0_f32;
+            let text_color = theme::text();
             let total_height: f32 = pages
                 .iter()
-                .map(|p| p.height().to_pt() as f32 * PT_TO_PX + margin)
+                .map(|p| p.height().to_pt() as f32 * PT_TO_PX)
                 .sum::<f32>()
-                + margin;
+                + pad;
 
             let view_canvas = canvas(
                 move |bounds, _window, _cx| (bounds, pages.clone()),
@@ -401,33 +429,36 @@ impl Render for NoteView {
                     let bounds_x = f32::from(bounds.origin.x);
                     let bounds_y = f32::from(bounds.origin.y);
                     let canvas_w = f32::from(bounds.size.width);
-                    let available_w = canvas_w - margin * 2.0;
-                    let mut y_offset = bounds_y + margin;
-                    let mut new_links: Vec<(Bounds<Pixels>, String)> = Vec::new();
+                    let available_w = canvas_w - pad * 2.0;
+                    let mut y_offset = bounds_y;
+                    let mut new_links: Vec<(Bounds<Pixels>, LinkTarget)> = Vec::new();
 
                     for page in &pages {
                         let page_w_pt = page.width().to_pt() as f32;
                         let page_h_pt = page.height().to_pt() as f32;
                         let scale = (available_w / (page_w_pt * PT_TO_PX)).min(1.0);
-                        let page_w = page_w_pt * PT_TO_PX * scale;
                         let page_h = page_h_pt * PT_TO_PX * scale;
-                        let x_offset = bounds_x + (canvas_w - page_w) / 2.0;
-
+                        let x_offset = bounds_x + (canvas_w - page_w_pt * PT_TO_PX * scale) / 2.0;
                         let origin = point(px(x_offset), px(y_offset));
+
                         let vp_top = bounds_y;
                         let vp_bottom = bounds_y + f32::from(bounds.size.height);
-                        let mut raw_links: Vec<LinkRegion> = Vec::new();
-                        typst_canvas::render_frame_with_viewport(
-                            window, page, origin, scale, vp_top, vp_bottom, &mut raw_links,
+                        let mut raw_links = Vec::new();
+                        typst_canvas::render_frame_styled(
+                            window, page, origin, scale, vp_top, vp_bottom,
+                            Some(text_color), &mut raw_links,
                         );
 
                         for lr in raw_links {
-                            if let Destination::Url(url) = lr.destination {
-                                new_links.push((lr.bounds, url.to_string()));
-                            }
+                            let target = match lr.destination {
+                                Destination::Url(url) => LinkTarget::Url(url.to_string()),
+                                Destination::Location(loc) => LinkTarget::Location(loc),
+                                _ => continue,
+                            };
+                            new_links.push((lr.bounds, target));
                         }
 
-                        y_offset += page_h + margin;
+                        y_offset += page_h;
                     }
 
                     *link_store.lock().unwrap() = new_links;
@@ -447,15 +478,34 @@ impl Render for NoteView {
                         .id("note-scroll")
                         .flex_1()
                         .overflow_y_scroll()
+                        .track_scroll(&self.scroll_handle)
                         .on_mouse_down(
                             MouseButton::Left,
-                            cx.listener(|nv, ev: &MouseDownEvent, _window, cx| {
+                            cx.listener(move |nv, ev: &MouseDownEvent, _window, cx| {
                                 let pos = ev.position;
-                                for (bounds, url) in nv.link_store.lock().unwrap().iter() {
-                                    if bounds.contains(&pos) && url.starts_with("zt-open:") {
-                                        let target =
-                                            url.trim_start_matches("zt-open:").to_string();
-                                        cx.emit(NoteViewEvent::OpenFile(target));
+                                let links = nv.link_store.lock().unwrap();
+                                for (bounds, target) in links.iter() {
+                                    if bounds.contains(&pos) {
+                                        match target {
+                                            LinkTarget::Location(loc) => {
+                                                let vd = nv.vault_doc.lock().unwrap();
+                                                if let Some(doc) = vd.document() {
+                                                    let p = doc.introspector.position(*loc);
+                                                    let y_pt = p.point.y.to_pt() as f32;
+                                                    if let Some(note_path) = vd.note_at_y(y_pt) {
+                                                        let note_path = note_path.to_string();
+                                                        drop(vd);
+                                                        cx.emit(NoteViewEvent::NavigateToLocation {
+                                                            note_path,
+                                                            y_pt,
+                                                        });
+                                                    }
+                                                }
+                                            }
+                                            LinkTarget::Url(_url) => {
+                                                // External URL — could open in browser
+                                            }
+                                        }
                                         break;
                                     }
                                 }

@@ -27,12 +27,14 @@ pub struct BookView {
     pub config: Option<BookConfig>,
     pub selected_nav_idx: usize,
     pages: Vec<Frame>,
-    world: Option<Arc<Mutex<zt_typst::world::ZettelWorld>>>,
+    link_store: Arc<Mutex<Vec<(Bounds<Pixels>, crate::note_view::LinkTarget)>>>,
     pending_compile: Option<Task<()>>,
+    /// Shared vault-wide compiled document.
+    vault_doc: Arc<Mutex<zt_typst::vault_doc::VaultDocument>>,
 }
 
 impl BookView {
-    pub fn new(vault_root: PathBuf, cx: &mut Context<Self>) -> Self {
+    pub fn new(vault_root: PathBuf, vault_doc: Arc<Mutex<zt_typst::vault_doc::VaultDocument>>, cx: &mut Context<Self>) -> Self {
         let config = BookConfig::load(&vault_root).ok();
 
         let mut bv = Self {
@@ -40,8 +42,9 @@ impl BookView {
             config,
             selected_nav_idx: 0,
             pages: Vec::new(),
-            world: None,
+            link_store: Arc::new(Mutex::new(Vec::new())),
             pending_compile: None,
+            vault_doc,
         };
 
         bv.load_chapter(0, cx);
@@ -60,67 +63,15 @@ impl BookView {
         let flat = config.flatten_chapters();
         let Some(chapter) = flat.get(nav_idx) else { return };
         let Some(ref file) = chapter.file else { return };
-
-        let src_root = self.vault_root.join(&config.src);
-        let file_path = src_root.join(file);
         let rel_path = file.to_string_lossy().to_string();
 
-        let source = match std::fs::read_to_string(&file_path) {
-            Ok(s) => s,
-            Err(e) => {
-                tracing::error!("BookView: failed to read {}: {}", file_path.display(), e);
-                return;
-            }
-        };
+        // Extract just this chapter's frame from the vault document
+        let vd = self.vault_doc.lock().unwrap();
+        self.pages = vd.note_frame(&rel_path).into_iter().collect();
+        self.selected_nav_idx = nav_idx;
+        drop(vd);
 
-        let preamble =
-            "#set text(fill: rgb(\"#cad3f5\"))\n#set page(fill: rgb(\"#24273a\"))\n".to_string();
-        let full_source = format!("{preamble}{source}");
-
-        let vault_root = self.vault_root.clone();
-        let world_arc = match &self.world {
-            Some(w) => {
-                {
-                    let mut w = w.lock().unwrap();
-                    w.set_main(&rel_path);
-                    w.set_source(&rel_path, full_source.clone());
-                }
-                w.clone()
-            }
-            None => {
-                let mut world = zt_typst::world::ZettelWorld::new(vault_root, &rel_path);
-                world.set_source(&rel_path, full_source.clone());
-                let arc = Arc::new(Mutex::new(world));
-                self.world = Some(arc.clone());
-                arc
-            }
-        };
-
-        self.pending_compile = None;
-        let bg = cx.background_executor().clone();
-        let task = cx.spawn(async move |this, cx| {
-            let frames = bg
-                .spawn(async move {
-                    let w = world_arc.lock().unwrap();
-                    let result = typst::compile::<typst::layout::PagedDocument>(&*w);
-                    match result.output {
-                        Ok(doc) => doc.pages.iter().map(|p| p.frame.clone()).collect(),
-                        Err(_) => Vec::new(),
-                    }
-                })
-                .await;
-
-            cx.update(|cx| {
-                this.update(cx, |bv, cx| {
-                    bv.pages = frames;
-                    cx.notify();
-                })
-                .ok();
-            })
-            .ok();
-        });
-
-        self.pending_compile = Some(task);
+        cx.notify();
     }
 
     /// Reload book.toml from disk and refresh the current chapter.
@@ -184,6 +135,8 @@ impl Render for BookView {
             .sum::<f32>()
             + margin;
 
+        let link_store = self.link_store.clone();
+        let text_color = theme::text();
         let content_canvas = canvas(
             move |bounds, _window, _cx| (bounds, pages.clone()),
             move |_bounds, (bounds, pages), window, _cx| {
@@ -192,6 +145,7 @@ impl Render for BookView {
                 let canvas_w = f32::from(bounds.size.width);
                 let available_w = canvas_w - margin * 2.0;
                 let mut y_offset = by + margin;
+                let mut new_links: Vec<(Bounds<Pixels>, crate::note_view::LinkTarget)> = Vec::new();
 
                 for page in &pages {
                     let page_w_pt = page.width().to_pt() as f32;
@@ -205,13 +159,29 @@ impl Render for BookView {
                     let origin = point(px(x_offset), px(y_offset));
                     let vp_top = by;
                     let vp_bottom = by + f32::from(bounds.size.height);
-                    let mut links = Vec::new();
-                    typst_canvas::render_frame_with_viewport(
-                        window, page, origin, scale, vp_top, vp_bottom, &mut links,
+                    let mut raw_links = Vec::new();
+                    typst_canvas::render_frame_styled(
+                        window, page, origin, scale, vp_top, vp_bottom,
+                        Some(text_color), &mut raw_links,
                     );
+
+                    for lr in raw_links {
+                        let target = match lr.destination {
+                            typst::model::Destination::Url(url) => {
+                                crate::note_view::LinkTarget::Url(url.to_string())
+                            }
+                            typst::model::Destination::Location(loc) => {
+                                crate::note_view::LinkTarget::Location(loc)
+                            }
+                            _ => continue,
+                        };
+                        new_links.push((lr.bounds, target));
+                    }
 
                     y_offset += page_h + margin;
                 }
+
+                *link_store.lock().unwrap() = new_links;
             },
         )
         .w_full()
@@ -301,8 +271,39 @@ impl Render for BookView {
                     .id("book-content-scroll")
                     .flex_1()
                     .overflow_y_scroll()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|bv, ev: &MouseDownEvent, _window, cx| {
+                            let pos = ev.position;
+                            let links = bv.link_store.lock().unwrap();
+                            for (bounds, target) in links.iter() {
+                                if bounds.contains(&pos) {
+                                    match target {
+                                        crate::note_view::LinkTarget::Location(loc) => {
+                                            let vd = bv.vault_doc.lock().unwrap();
+                                            if let Some(doc) = vd.document() {
+                                                let p = doc.introspector.position(*loc);
+                                                let y_pt = p.point.y.to_pt() as f32;
+                                                if let Some(note_path) = vd.note_at_y(y_pt) {
+                                                    let target = format!("{note_path}#__loc_{y_pt}");
+                                                    drop(links);
+                                                    drop(vd);
+                                                    cx.emit(BookViewEvent::OpenFile(target));
+                                                }
+                                            }
+                                        }
+                                        crate::note_view::LinkTarget::Url(_url) => {
+                                            // External URL — could open in browser
+                                        }
+                                    }
+                                    break;
+                                }
+                            }
+                        }),
+                    )
                     .child(content_canvas),
             )
             .child(footer)
     }
 }
+

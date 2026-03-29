@@ -107,6 +107,10 @@ fn compile_one(ch: &Chapter, src_root: &Path, refs: &RefMaps) -> Result<Compiled
     )
     .with_context(|| format!("Failed to compile: {}", rel_path))?;
 
+    // Prepend chapter title as an h1
+    let title_html = format!("<h1 class=\"chapter-title\">{}</h1>\n", ch.title);
+    let html = format!("{title_html}{html}");
+
     let plain_text = strip_html_tags(&html);
 
     Ok(CompiledChapter {

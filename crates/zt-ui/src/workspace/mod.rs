@@ -71,12 +71,6 @@ pub struct NoteTab {
     pub editor: Entity<Editor>,
 }
 
-/// State for a single open PDF tab (editor-only, no note_view).
-pub struct PdfTab {
-    pub rel_path: RelPath,
-    pub title: String,
-    pub editor: Entity<Editor>,
-}
 
 // ── Workspace entity ──────────────────────────────────────────────────────────
 
@@ -97,10 +91,10 @@ pub struct Workspace {
     pub(self) active_note_idx: usize,
     /// Set by the close-button's on_mouse_down; checked by the outer tab's on_click.
     pub(self) pending_tab_close: Option<usize>,
-    // Multi-tab PDF area
-    pub(self) pdf_tabs: Vec<PdfTab>,
-    pub(self) active_pdf_idx: usize,
-    pub(self) pending_pdf_close: Option<usize>,
+    // PDF composer
+    pub(self) pdf_editor: Option<Entity<Editor>>,
+    pub(self) pdf_doc_list: Vec<String>,
+    pub(self) active_pdf_doc: String,
     // Other views
     pub(self) graph_view: Option<Entity<GraphView>>,
     pub(self) book_view: Option<Entity<BookView>>,
@@ -110,6 +104,8 @@ pub struct Workspace {
     pub(self) pending_open: Arc<std::sync::Mutex<Option<String>>>,
     /// Pending cross-note navigation from NoteView link click.
     pub(self) pending_note_nav: Option<String>,
+    /// Absolute Y-offset (in Typst points) to scroll to after opening the pending note nav.
+    pub(self) pending_scroll_y: Option<f32>,
     /// True after the first startup auto-open; prevents re-opening when all tabs are closed.
     pub(self) startup_done: bool,
     /// Track which multi-file chapters are expanded in the book right panel.
@@ -117,6 +113,8 @@ pub struct Workspace {
     /// Item being renamed inline in the book panel: (key, input_state).
     /// Key is either a ChapterLoc key or "part-N" for parts.
     pub(self) book_renaming: Option<(String, Entity<gpui_component::input::InputState>)>,
+    /// Shared vault-wide compiled document.
+    pub(self) vault_doc: Option<Arc<Mutex<zt_typst::vault_doc::VaultDocument>>>,
 }
 
 // ── Constructor ───────────────────────────────────────────────────────────────
@@ -157,6 +155,11 @@ impl Workspace {
             .detach();
         }
 
+        // Build vault document (compiles all notes as one)
+        let vault_doc = vault_root.as_ref().map(|root| {
+            Arc::new(Mutex::new(zt_typst::vault_doc::VaultDocument::new(root.clone())))
+        });
+
         Self {
             vault_root,
             active_tab: ActiveTab::Notes,
@@ -170,18 +173,20 @@ impl Workspace {
             note_tabs: Vec::new(),
             active_note_idx: 0,
             pending_tab_close: None,
-            pdf_tabs: Vec::new(),
-            active_pdf_idx: 0,
-            pending_pdf_close: None,
+            pdf_editor: None,
+            pdf_doc_list: Vec::new(),
+            active_pdf_doc: String::new(),
             graph_view,
             book_view: None,
             file_tree: None,
             vault_index,
             pending_open: Arc::new(std::sync::Mutex::new(None)),
             pending_note_nav: None,
+            pending_scroll_y: None,
             startup_done: false,
             expanded_book_chapters: std::collections::HashSet::new(),
             book_renaming: None,
+            vault_doc,
         }
     }
 
@@ -219,8 +224,9 @@ impl Workspace {
         let root_clone = root.clone();
         let rel = rel_path.to_string();
 
+        let vd = self.vault_doc.clone().unwrap();
         let note_view = cx.new(|cx| {
-            NoteView::new(root_clone.clone(), rel.clone(), source.clone(), window, cx)
+            NoteView::new(root_clone.clone(), rel.clone(), source.clone(), vd, window, cx)
         });
         self.attach_note_view_handler(&note_view, cx);
 
@@ -248,8 +254,9 @@ impl Workspace {
         let Some(ref vault_root) = self.vault_root else { return };
         let vault_root = vault_root.clone();
 
+        let vd = self.vault_doc.clone().unwrap();
         let note_view = cx.new(|cx| {
-            NoteView::new_draft(vault_root.clone(), dir.to_string(), window, cx)
+            NoteView::new_draft(vault_root.clone(), dir.to_string(), vd, window, cx)
         });
         self.attach_note_view_handler(&note_view, cx);
 
@@ -274,8 +281,13 @@ impl Workspace {
             note_view,
             |ws: &mut Workspace, nve, ev: &NoteViewEvent, cx| match ev {
                 NoteViewEvent::OpenFile(target) => {
-                    let path = target.split('#').next().unwrap_or(target).to_string();
-                    ws.pending_note_nav = Some(path);
+                    ws.pending_note_nav = Some(target.clone());
+                    ws.pending_scroll_y = None;
+                    cx.notify();
+                }
+                NoteViewEvent::NavigateToLocation { note_path, y_pt } => {
+                    ws.pending_note_nav = Some(note_path.clone());
+                    ws.pending_scroll_y = Some(*y_pt);
                     cx.notify();
                 }
                 NoteViewEvent::Recompiled => {
@@ -355,46 +367,52 @@ impl Workspace {
     }
 
     /// Open a vault-relative path in the PDF tab list, or switch to it if already open.
-    pub(self) fn open_pdf_file(
-        &mut self,
-        rel_path: &str,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    /// Load a PDF document from `.zetteltypsten/documents/` into the editor.
+    ///
+    /// The editor uses a virtual rel_path `__pdf_doc__.typ` at the vault root
+    /// so that `#include "note.typ"` resolves relative to the vault, not to
+    /// the `.zetteltypsten/documents/` directory.
+    pub(self) fn load_pdf_doc(&mut self, filename: &str, window: &mut Window, cx: &mut Context<Self>) {
         let Some(ref root) = self.vault_root else { return };
-        // Already open → switch to it
-        if let Some(idx) = self.pdf_tabs.iter().position(|t| t.rel_path.as_str() == rel_path) {
-            self.active_pdf_idx = idx;
-            cx.notify();
-            return;
-        }
-        let full_path = root.join(rel_path);
-        let source = match std::fs::read_to_string(&full_path) {
-            Ok(s) => s,
-            Err(e) => {
-                tracing::error!("Failed to read {}: {}", full_path.display(), e);
-                return;
-            }
-        };
+        let doc_dir = root.join(".zetteltypsten/documents");
+        let _ = std::fs::create_dir_all(&doc_dir);
+        let doc_path = doc_dir.join(filename);
+        let source = std::fs::read_to_string(&doc_path).unwrap_or_default();
+        // Use a virtual path at vault root so #include resolves relative to vault
+        let virtual_rel = "__pdf_doc__.typ".to_string();
         let root_clone = root.clone();
-        let title = Path::new(rel_path)
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or(rel_path)
-            .to_string();
-        let editor = cx.new(|cx| Editor::new(root_clone, rel_path.to_string(), source, window, cx));
-        self.pdf_tabs.push(PdfTab { rel_path: RelPath::new(rel_path.to_string()), title, editor });
-        self.active_pdf_idx = self.pdf_tabs.len() - 1;
+        let actual_path = format!(".zetteltypsten/documents/{}", filename);
+
+        self.pdf_editor = Some(cx.new(|cx| {
+            let mut editor = Editor::new(root_clone, virtual_rel, source, window, cx);
+            // Store the real disk path for save operations
+            editor.set_save_path(actual_path);
+            editor
+        }));
+        self.active_pdf_doc = filename.to_string();
         cx.notify();
     }
 
-    /// Close the PDF tab at `idx`, clamping `active_pdf_idx` if needed.
-    pub(self) fn close_pdf_tab(&mut self, idx: usize, cx: &mut Context<Self>) {
-        if idx < self.pdf_tabs.len() {
-            self.pdf_tabs.remove(idx);
-            self.active_pdf_idx = self.active_pdf_idx.min(self.pdf_tabs.len().saturating_sub(1));
-            cx.notify();
+    /// Scan `.zetteltypsten/documents/` for PDF document files.
+    pub(self) fn scan_pdf_docs(&mut self) {
+        let Some(ref root) = self.vault_root else { return };
+        let doc_dir = root.join(".zetteltypsten/documents");
+        let _ = std::fs::create_dir_all(&doc_dir);
+        let mut docs: Vec<String> = std::fs::read_dir(&doc_dir)
+            .into_iter()
+            .flatten()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().is_some_and(|ext| ext == "typ"))
+            .filter_map(|e| e.file_name().into_string().ok())
+            .collect();
+        docs.sort();
+        if docs.is_empty() {
+            // Create a default document
+            let default = "document.typ";
+            let _ = std::fs::write(doc_dir.join(default), "");
+            docs.push(default.to_string());
         }
+        self.pdf_doc_list = docs;
     }
 }
 
@@ -554,7 +572,8 @@ impl Render for Workspace {
         if self.active_tab == ActiveTab::Book && self.book_view.is_none() {
             if let Some(ref root) = self.vault_root {
                 let root = root.clone();
-                let bv = cx.new(|cx| BookView::new(root, cx));
+                let vd = self.vault_doc.clone().unwrap();
+                let bv = cx.new(|cx| BookView::new(root, vd, cx));
                 cx.subscribe(&bv, |workspace, _bv, ev: &crate::book_view::BookViewEvent, cx| {
                     match ev {
                         crate::book_view::BookViewEvent::OpenFile(rel) => {
@@ -568,18 +587,34 @@ impl Render for Workspace {
             }
         }
 
+        // Lazy-create PDF editor (only when PDF tab first activated).
+        if self.active_tab == ActiveTab::Pdf && self.pdf_editor.is_none() {
+            self.scan_pdf_docs();
+            let first = self.pdf_doc_list.first().cloned().unwrap_or_else(|| "document.typ".into());
+            self.load_pdf_doc(&first, window, cx);
+        }
+
         // ── Consume pending opens ─────────────────────────────────────────────
         let pending = self.pending_open.lock().unwrap().take();
         if let Some(rel_path) = pending {
+            // File clicks always open in Notes tab (PDF tab has its own documents)
             if self.active_tab == ActiveTab::Pdf {
-                self.open_pdf_file(&rel_path, window, cx);
-            } else {
-                self.open_file(&rel_path, window, cx);
+                self.active_tab = ActiveTab::Notes;
             }
+            self.open_file(&rel_path, window, cx);
         }
         let pending_nav = self.pending_note_nav.take();
+        let pending_scroll_y = self.pending_scroll_y.take();
         if let Some(rel_path) = pending_nav {
             self.open_file(&rel_path, window, cx);
+            // Scroll to the target position within the note
+            if let Some(y_pt) = pending_scroll_y {
+                if let Some(tab) = self.note_tabs.get(self.active_note_idx) {
+                    tab.note_view.update(cx, |nv, _cx| {
+                        nv.scroll_to_y_abs(y_pt);
+                    });
+                }
+            }
         }
 
         // ── Theme colors ──────────────────────────────────────────────────────
@@ -803,16 +838,15 @@ impl Render for Workspace {
                 }
             }
             ActiveTab::Pdf => {
-                let tab_bar = self.render_pdf_tab_bar(cx);
                 let pdf_content: AnyElement =
-                    if let Some(tab) = self.pdf_tabs.get(self.active_pdf_idx) {
+                    if let Some(ref editor) = self.pdf_editor {
                         div()
                             .flex_1()
                             .overflow_hidden()
-                            .child(tab.editor.clone())
+                            .child(editor.clone())
                             .into_any_element()
                     } else {
-                        empty_state("PDF View", "Open a file from the sidebar")
+                        empty_state("PDF Composer", "Switch to PDF tab to start composing")
                     };
                 div()
                     .flex_1()
@@ -820,7 +854,6 @@ impl Render for Workspace {
                     .flex()
                     .flex_col()
                     .overflow_hidden()
-                    .child(tab_bar)
                     .child(pdf_content)
             }
         };

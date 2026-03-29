@@ -26,6 +26,8 @@ struct RenderState {
     /// Items fully outside this range are skipped.
     viewport_top: f32,
     viewport_bottom: f32,
+    /// If set, override ALL text fill colors with this color.
+    text_color_override: Option<Hsla>,
 }
 
 impl RenderState {
@@ -37,6 +39,7 @@ impl RenderState {
             scale_y: 1.0,
             viewport_top: -10000.0,
             viewport_bottom: 10000.0,
+            text_color_override: None,
         }
     }
 
@@ -44,21 +47,17 @@ impl RenderState {
         Self {
             offset_x: self.offset_x + x * self.scale_x,
             offset_y: self.offset_y + y * self.scale_y,
-            scale_x: self.scale_x,
-            scale_y: self.scale_y,
-            viewport_top: self.viewport_top,
-            viewport_bottom: self.viewport_bottom,
+            text_color_override: self.text_color_override,
+            ..*self
         }
     }
 
     fn scale(&self, sx: f32, sy: f32) -> Self {
         Self {
-            offset_x: self.offset_x,
-            offset_y: self.offset_y,
             scale_x: self.scale_x * sx,
             scale_y: self.scale_y * sy,
-            viewport_top: self.viewport_top,
-            viewport_bottom: self.viewport_bottom,
+            text_color_override: self.text_color_override,
+            ..*self
         }
     }
 
@@ -131,6 +130,24 @@ pub fn render_frame_with_viewport(
     viewport_bottom: f32,
     links: &mut Vec<LinkRegion>,
 ) {
+    render_frame_styled(window, frame, origin, scale, viewport_top, viewport_bottom, None, links);
+}
+
+/// Render with viewport culling and an optional text color override.
+///
+/// When `text_color` is `Some(color)`, ALL text glyphs are painted in that color
+/// regardless of what Typst's `#set text(fill: ...)` specified. This lets the
+/// renderer apply theme colors without injecting Typst preamble source.
+pub fn render_frame_styled(
+    window: &mut Window,
+    frame: &Frame,
+    origin: Point<Pixels>,
+    scale: f32,
+    viewport_top: f32,
+    viewport_bottom: f32,
+    text_color: Option<Hsla>,
+    links: &mut Vec<LinkRegion>,
+) {
     let state = RenderState {
         offset_x: f32::from(origin.x),
         offset_y: f32::from(origin.y),
@@ -138,6 +155,7 @@ pub fn render_frame_with_viewport(
         scale_y: scale,
         viewport_top,
         viewport_bottom,
+        text_color_override: text_color,
     };
     render_frame_inner(window, frame, &state, links);
 }
@@ -308,7 +326,7 @@ fn render_text(
     state: &RenderState,
     text: &TextItem,
 ) {
-    let color = paint_to_hsla(&text.fill);
+    let color = state.text_color_override.unwrap_or_else(|| paint_to_hsla(&text.fill));
     let font_size_px = text.size.to_pt() as f32 * PT_TO_PX * state.scale_x;
 
     // Try GPU-accelerated paint_glyph — only if GPUI has the EXACT same font.
@@ -343,7 +361,7 @@ fn render_text(
         return;
     }
 
-    // Fallback: render as path outlines (slow but always works)
+    // Fallback: render as path outlines (slow — one paint_path per glyph)
     let upem = text.font.units_per_em() as f32;
     let scale_x = font_size_px / upem;
     let scale_y = -font_size_px / upem;

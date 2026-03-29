@@ -42,13 +42,13 @@ pub fn init(cx: &mut App, workspace: Entity<Workspace>) {
         workspace_ref.update(cx, |workspace, cx| {
             match workspace.active_tab {
                 ActiveTab::Pdf => {
-                    if let Some(tab) = workspace.pdf_tabs.get(workspace.active_pdf_idx) {
-                        tab.editor.update(cx, |editor, cx| editor.save_file(cx));
+                    if let Some(ref editor) = workspace.pdf_editor {
+                        editor.update(cx, |editor, cx| editor.save_file(cx));
                     }
                 }
                 _ => {
                     if let Some(tab) = workspace.note_tabs.get(workspace.active_note_idx) {
-                        tab.editor.update(cx, |editor, cx| editor.save_file(cx));
+                        tab.note_view.update(cx, |nv, cx| nv.save_file(cx));
                     }
                 }
             }

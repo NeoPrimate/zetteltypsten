@@ -20,5 +20,6 @@ tracing = { workspace = true }
 typst = { workspace = true }
 typst-syntax = { workspace = true }
 typst-render = { workspace = true }
+typst-pdf = { workspace = true }
 ttf-parser = "0.25"
 walkdir = { workspace = true }

@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 zt-core = { workspace = true }
+zt-index = { path = "../zt-index" }
 typst = { workspace = true }
 typst-syntax = { workspace = true }
 typst-svg = { workspace = true }
@@ -18,3 +19,5 @@ comemo = { workspace = true }
 chrono = { workspace = true }
 anyhow = { workspace = true }
 log = { workspace = true }
+walkdir = { workspace = true }
+tracing = { workspace = true }

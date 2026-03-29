@@ -419,9 +419,15 @@ fn chapter_to_toml(ch: &Chapter) -> TomlChapter {
 }
 
 fn assign_numbers(chapters: &mut [Chapter], prefix: &mut Vec<u32>) {
-    for (i, ch) in chapters.iter_mut().enumerate() {
+    let mut counter = 0u32;
+    for ch in chapters.iter_mut() {
+        if ch.is_part {
+            ch.number = None; // parts are unnumbered
+            continue;
+        }
+        counter += 1;
         let mut num = prefix.clone();
-        num.push((i + 1) as u32);
+        num.push(counter);
         ch.number = Some(num.clone());
 
         if !ch.children.is_empty() {

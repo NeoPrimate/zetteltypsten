@@ -28,18 +28,44 @@ pub struct NoteInfo {
 /// Extract [`NoteInfo`] from a fully compiled [`PagedDocument`].
 pub fn extract_from_compiled(doc: &PagedDocument) -> NoteInfo {
     let intro = &doc.introspector;
-    let headings = extract_headings(intro);
-    let tags = extract_tags(intro);
-    let labels = extract_labels(intro);
-    let outlinks = extract_outlinks(intro);
-    let refs = extract_refs(intro);
+    let headings = extract_headings(intro, None);
+    let tags = extract_tags(intro, None);
+    let labels = extract_labels(intro, None);
+    let outlinks = extract_outlinks(intro, None);
+    let refs = extract_refs(intro, None);
     NoteInfo { headings, tags, labels, outlinks, refs }
 }
 
-fn extract_headings(intro: &Introspector) -> Vec<(usize, String)> {
+/// Extract [`NoteInfo`] for a single note within a vault document.
+/// Only includes elements whose Y-position falls within `y_start..y_end` (in points).
+pub fn extract_for_note(doc: &PagedDocument, y_start_pt: f32, y_end_pt: f32) -> NoteInfo {
+    let range = Some((doc, y_start_pt, y_end_pt));
+    let intro = &doc.introspector;
+    let headings = extract_headings(intro, range);
+    let tags = extract_tags(intro, range);
+    let labels = extract_labels(intro, range);
+    let outlinks = extract_outlinks(intro, range);
+    let refs = extract_refs(intro, range);
+    NoteInfo { headings, tags, labels, outlinks, refs }
+}
+
+/// Optional Y-range filter: (doc, y_start, y_end) in Typst points.
+type YFilter<'a> = Option<(&'a PagedDocument, f32, f32)>;
+
+/// Check if a content element's position falls within the Y-range.
+fn in_range(c: &Content, filter: YFilter) -> bool {
+    let Some((doc, y_start, y_end)) = filter else { return true };
+    let Some(loc) = c.location() else { return false };
+    let pos = doc.introspector.position(loc);
+    let y = pos.point.y.to_pt() as f32;
+    y >= y_start && y < y_end
+}
+
+fn extract_headings(intro: &Introspector, filter: YFilter) -> Vec<(usize, String)> {
     intro
         .query(&Selector::Elem(Element::of::<HeadingElem>(), None))
         .iter()
+        .filter(|c| in_range(c, filter))
         .filter_map(|c| {
             let h = c.to_packed::<HeadingElem>()?;
             let level = h.resolve_level(StyleChain::default()).get();
@@ -49,9 +75,9 @@ fn extract_headings(intro: &Introspector) -> Vec<(usize, String)> {
         .collect()
 }
 
-fn extract_tags(intro: &Introspector) -> Vec<String> {
+fn extract_tags(intro: &Introspector, filter: YFilter) -> Vec<String> {
     let mut tags = Vec::new();
-    for c in intro.query(&Selector::Elem(Element::of::<MetadataElem>(), None)).iter() {
+    for c in intro.query(&Selector::Elem(Element::of::<MetadataElem>(), None)).iter().filter(|c| in_range(c, filter)) {
         let Some(meta) = c.to_packed::<MetadataElem>() else { continue };
         // Only consider metadata that has a tag/tags label
         let label_name = c.label().map(|l| l.resolve().as_str().to_string()).unwrap_or_default();
@@ -73,9 +99,9 @@ fn extract_tags(intro: &Introspector) -> Vec<String> {
     tags
 }
 
-fn extract_labels(intro: &Introspector) -> Vec<(String, String)> {
+fn extract_labels(intro: &Introspector, filter: YFilter) -> Vec<(String, String)> {
     let mut labels = Vec::new();
-    for c in intro.all() {
+    for c in intro.all().filter(|c| in_range(c, filter)) {
         let Some(label) = c.label() else { continue };
         let name = label.resolve().as_str().to_string();
         // Skip tag/metadata sentinels
@@ -88,10 +114,10 @@ fn extract_labels(intro: &Introspector) -> Vec<(String, String)> {
     labels
 }
 
-fn extract_outlinks(intro: &Introspector) -> Vec<String> {
+fn extract_outlinks(intro: &Introspector, filter: YFilter) -> Vec<String> {
     use typst::model::{Destination, LinkTarget};
     let mut links = Vec::new();
-    for c in intro.query(&Selector::Elem(Element::of::<LinkElem>(), None)).iter() {
+    for c in intro.query(&Selector::Elem(Element::of::<LinkElem>(), None)).iter().filter(|c| in_range(c, filter)) {
         let Some(link) = c.to_packed::<LinkElem>() else { continue };
         match &link.dest {
             LinkTarget::Dest(Destination::Url(url)) => {
@@ -111,9 +137,9 @@ fn extract_outlinks(intro: &Introspector) -> Vec<String> {
     links
 }
 
-fn extract_refs(intro: &Introspector) -> Vec<String> {
+fn extract_refs(intro: &Introspector, filter: YFilter) -> Vec<String> {
     let mut refs = Vec::new();
-    for c in intro.query(&Selector::Elem(Element::of::<RefElem>(), None)).iter() {
+    for c in intro.query(&Selector::Elem(Element::of::<RefElem>(), None)).iter().filter(|c| in_range(c, filter)) {
         let Some(r) = c.to_packed::<RefElem>() else { continue };
         refs.push(r.target.resolve().as_str().to_string());
     }

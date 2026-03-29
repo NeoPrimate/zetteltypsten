@@ -90,6 +90,17 @@ impl ZettelWorld {
         Some(range)
     }
 
+    /// Remove a cached source, forcing the next `source()` call to re-read from disk.
+    pub fn clear_source(&mut self, path: &str) {
+        let id = FileId::new(None, VirtualPath::new(path));
+        self.sources.remove(&id);
+    }
+
+    /// The vault root directory.
+    pub fn root(&self) -> &PathBuf {
+        &self.root
+    }
+
     /// Change which file is the main compilation target.
     pub fn set_main(&mut self, path: &str) {
         self.main_id = FileId::new(None, VirtualPath::new(path));
