@@ -46,19 +46,11 @@ pub fn build_book(book_root: &Path) -> Result<CompiledBook> {
 
     let mut chapters = Vec::new();
 
-    for ch in &config.prefix_chapters {
-        compile_tree(ch, &src_root, &refs, &mut chapters)?;
-    }
-    for part in &config.parts {
-        for ch in &part.chapters {
-            compile_tree(ch, &src_root, &refs, &mut chapters)?;
-        }
-    }
-    for ch in &config.suffix_chapters {
+    for ch in &config.chapters {
         compile_tree(ch, &src_root, &refs, &mut chapters)?;
     }
 
-    log::info!(
+    tracing::info!(
         "Book compiled: {} chapters ({} with content)",
         chapters.len(),
         chapters.iter().filter(|c| !c.is_draft).count()
@@ -105,7 +97,6 @@ fn compile_one(ch: &Chapter, src_root: &Path, refs: &RefMaps) -> Result<Compiled
 
     let rel_path = file.to_string_lossy().to_string();
 
-    // Compile with cross-note @ref support
     let html = zt_typst::compiler::compile_to_body_html_with_refs(
         src_root,
         &rel_path,

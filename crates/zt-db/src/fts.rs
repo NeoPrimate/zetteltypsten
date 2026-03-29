@@ -34,7 +34,7 @@ impl Database {
                  LIMIT ?2",
             )
             .unwrap_or_else(|e| {
-                log::error!("FTS query prepare failed: {e}");
+                tracing::error!("FTS query prepare failed: {e}");
                 panic!("FTS query failed");
             });
 
@@ -46,7 +46,7 @@ impl Database {
             })
         })
         .unwrap_or_else(|e| {
-            log::error!("FTS query failed: {e}");
+            tracing::error!("FTS query failed: {e}");
             panic!("FTS query failed");
         })
         .filter_map(|r| r.ok())

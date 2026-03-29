@@ -16,7 +16,7 @@ gpui-component = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
-log = { workspace = true }
+tracing = { workspace = true }
 typst = { workspace = true }
 typst-syntax = { workspace = true }
 typst-render = { workspace = true }

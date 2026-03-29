@@ -9,4 +9,4 @@ zt-index = { path = "../zt-index" }
 zt-fs = { path = "../zt-fs" }
 rusqlite = { version = "0.32", features = ["bundled"] }
 anyhow = "1"
-log = "0.4"
+tracing = "0.1"

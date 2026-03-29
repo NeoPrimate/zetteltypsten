@@ -1,3 +1,4 @@
+use crate::compiled::NoteInfo;
 use crate::extractor;
 use crate::link_graph::LinkGraph;
 use crate::tag_index::TagIndex;
@@ -51,9 +52,8 @@ impl VaultIndex {
 
     /// Index (or re-index) a single note's content.
     pub fn index_note(&mut self, note_id: &NoteId, content: &str) {
-        // Extract title
-        let title = extractor::extract_title(content)
-            .unwrap_or_else(|| note_id.display_name().to_string());
+        // Title is always the file stem (note name), not the first heading.
+        let title = note_id.display_name().to_string();
         self.titles.insert(note_id.clone(), title);
 
         // Extract and index tags
@@ -94,6 +94,50 @@ impl VaultIndex {
         }
 
         // Ensure the note itself is in the graph
+        self.link_graph.add_note(note_id.clone());
+    }
+
+    /// Index (or re-index) a single note from compiled document information.
+    ///
+    /// This is the preferred path when a note has just been compiled — it uses
+    /// the fully resolved semantic data from the Typst introspector instead of
+    /// re-parsing the source text.
+    pub fn index_note_compiled(&mut self, note_id: &NoteId, info: &NoteInfo) {
+        // Title is always the file stem (note name), not the first heading.
+        let title = note_id.display_name().to_string();
+        self.titles.insert(note_id.clone(), title);
+
+        // Tags
+        let tags: Vec<zt_core::tag::Tag> = info.tags.iter().map(|s| s.clone().into()).collect();
+        self.tag_index.set_tags(note_id, tags);
+
+        // Labels
+        self.label_map.retain(|_, nid| nid != note_id);
+        self.label_text_map.retain(|k, _| self.label_map.contains_key(k));
+        for (label, display) in &info.labels {
+            self.label_map.insert(label.clone(), note_id.clone());
+            self.label_text_map.insert(label.clone(), display.clone());
+        }
+
+        // Outlinks (rel paths from zt-open: URLs)
+        self.link_graph.clear_outgoing(note_id);
+        for target in &info.outlinks {
+            let target_id = NoteId(target.clone());
+            self.link_graph.add_link(note_id, &target_id);
+            self.link_contexts
+                .insert((note_id.clone(), target_id), String::new());
+        }
+
+        // @ref references → link to note owning the label
+        for ref_label in &info.refs {
+            if let Some(target_note) = self.label_map.get(ref_label) {
+                if target_note != note_id {
+                    let target_note = target_note.clone();
+                    self.link_graph.add_link(note_id, &target_note);
+                }
+            }
+        }
+
         self.link_graph.add_note(note_id.clone());
     }
 
@@ -214,14 +258,14 @@ This links back to #link("note-a") and to #link("note-c").
         assert_eq!(index.tag_index.tags_for_note(&a).len(), 2);
         assert_eq!(index.tag_index.tag_count(), 2);
 
-        // Check titles
-        assert_eq!(index.titles.get(&a).unwrap(), "Note A");
-        assert_eq!(index.titles.get(&b).unwrap(), "Note B");
+        // Check titles (file stem, not first heading)
+        assert_eq!(index.titles.get(&a).unwrap(), "note-a");
+        assert_eq!(index.titles.get(&b).unwrap(), "note-b");
 
         // Check backlinks with context
         let backlinks = index.backlinks_with_context(&b);
         assert_eq!(backlinks.len(), 1);
-        assert_eq!(backlinks[0].source_title, "Note A");
+        assert_eq!(backlinks[0].source_title, "note-a");
         assert!(backlinks[0].context.contains("#link(\"note-b\")"));
 
         let _ = fs::remove_dir_all(&tmp);

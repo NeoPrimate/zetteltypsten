@@ -228,7 +228,6 @@ fn render_group(
 /// Cache for mapping Typst font → GPUI FontId.
 /// Uses a global cache since font resolution is expensive.
 use std::collections::HashMap;
-use std::sync::Mutex;
 use std::cell::RefCell;
 
 /// Cache key: (family, weight_number, is_italic)
@@ -253,6 +252,12 @@ fn typst_weight_to_gpui(w: u16) -> FontWeight {
 }
 
 /// Try to resolve a Typst font to a GPUI FontId.
+///
+/// Returns `None` when GPUI doesn't have the **exact same** font family.
+/// `resolve_font` silently falls back to a default when the family is missing,
+/// which causes glyph-ID mismatches (math symbols become garbage).  We detect
+/// the fallback by comparing the resolved font's family against the requested
+/// one and rejecting mismatches.
 fn resolve_gpui_font(window: &Window, typst_font: &typst::text::Font) -> Option<FontId> {
     let info = typst_font.info();
     let family = &info.family;
@@ -277,9 +282,21 @@ fn resolve_gpui_font(window: &Window, typst_font: &typst::text::Font) -> Option<
             style,
         };
 
+        let ts = window.text_system();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            window.text_system().resolve_font(&gpui_font)
-        })).ok();
+            let font_id = ts.resolve_font(&gpui_font);
+            // Verify the resolved font is actually the family we asked for.
+            // GPUI silently falls back to a default font when the family is
+            // missing, which would cause glyph-ID mismatches for math fonts.
+            if let Some(resolved) = ts.get_font_for_id(font_id) {
+                if resolved.family != gpui_font.family {
+                    return None; // family mismatch → fall back to outlines
+                }
+            }
+            Some(font_id)
+        }))
+        .ok()
+        .flatten();
 
         cache.insert(key, result);
         result
@@ -372,15 +389,15 @@ fn glyph_outline_path(
 
     struct Builder {
         path: PathBuilder,
-        ox: f32,
-        oy: f32,
-        sx: f32,
-        sy: f32,
+        origin_x: f32,
+        origin_y: f32,
+        scale_x: f32,
+        scale_y: f32,
     }
 
     impl Builder {
         fn pt(&self, x: f32, y: f32) -> Point<Pixels> {
-            point(px(self.ox + x * self.sx), px(self.oy + y * self.sy))
+            point(px(self.origin_x + x * self.scale_x), px(self.origin_y + y * self.scale_y))
         }
     }
 
@@ -410,10 +427,10 @@ fn glyph_outline_path(
 
     let mut builder = Builder {
         path: PathBuilder::fill(),
-        ox: origin_x,
-        oy: origin_y,
-        sx: scale_x,
-        sy: scale_y,
+        origin_x,
+        origin_y,
+        scale_x,
+        scale_y,
     };
 
     ttf.outline_glyph(id, &mut builder)?;

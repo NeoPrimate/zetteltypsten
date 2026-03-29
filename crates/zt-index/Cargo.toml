@@ -8,5 +8,7 @@ zt-core = { workspace = true }
 zt-fs = { workspace = true }
 tantivy = { workspace = true }
 petgraph = { workspace = true }
+typst = { workspace = true }
+typst-syntax = { workspace = true }
 anyhow = { workspace = true }
 log = { workspace = true }

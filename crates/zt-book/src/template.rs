@@ -111,24 +111,7 @@ fn render_toc(config: &BookConfig, current_path: Option<&str>) -> String {
     let site = &config.html.site_url;
     let no_label = config.html.no_section_label;
 
-    // Prefix
-    for ch in &config.prefix_chapters {
-        render_chapter_toc(&mut html, ch, current_path, site, no_label);
-    }
-
-    // Parts
-    for part in &config.parts {
-        html.push_str(&format!(
-            "<li class=\"part-title\"><strong>{}</strong></li>\n",
-            part.title
-        ));
-        for ch in &part.chapters {
-            render_chapter_toc(&mut html, ch, current_path, site, no_label);
-        }
-    }
-
-    // Suffix
-    for ch in &config.suffix_chapters {
+    for ch in &config.chapters {
         render_chapter_toc(&mut html, ch, current_path, site, no_label);
     }
 
@@ -162,7 +145,7 @@ fn render_chapter_toc(
         String::new()
     };
 
-    if let Some(ref file) = ch.file {
+    if let Some(file) = ch.file.as_ref() {
         let url = format!(
             "{}{}",
             site_url,
@@ -200,7 +183,7 @@ fn render_page_nav(
     let mut html = String::from("<nav class=\"page-nav\">\n");
 
     if let Some(p) = prev {
-        if let Some(ref path) = p.file {
+        if let Some(path) = p.file.as_ref() {
             let url = format!(
                 "{}{}",
                 site_url,
@@ -218,7 +201,7 @@ fn render_page_nav(
     }
 
     if let Some(n) = next {
-        if let Some(ref path) = n.file {
+        if let Some(path) = n.file.as_ref() {
             let url = format!(
                 "{}{}",
                 site_url,

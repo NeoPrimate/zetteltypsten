@@ -210,7 +210,7 @@ mod tests {
         let backlinks = db.backlinks("note-a");
         assert_eq!(backlinks.len(), 1);
         assert_eq!(backlinks[0].source_id, "note-b");
-        assert_eq!(backlinks[0].source_title, "Note B");
+        assert_eq!(backlinks[0].source_title, "note-b");
 
         let outgoing = db.outgoing("note-b");
         assert_eq!(outgoing.len(), 1);
@@ -226,7 +226,7 @@ mod tests {
         assert_eq!(lm.get("hello"), Some(&"note-a".to_string()));
 
         let tm = db.title_map();
-        assert_eq!(tm.get("note-a"), Some(&"My Title".to_string()));
+        assert_eq!(tm.get("note-a"), Some(&"note-a".to_string()));
 
         let ltm = db.label_text_map();
         assert_eq!(ltm.get("hello"), Some(&"My Title".to_string()));

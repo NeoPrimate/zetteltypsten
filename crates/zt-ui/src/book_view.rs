@@ -1,30 +1,34 @@
 use crate::theme;
 use crate::typst_canvas;
 use gpui::*;
-use gpui_component::input::{Input, InputEvent, InputState};
-use gpui_component::sidebar::{Sidebar, SidebarMenu, SidebarMenuItem};
 use gpui_component::{Icon, IconName};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use typst::layout::Frame;
-use zt_book::config::{BookConfig, Chapter};
+use zt_book::config::BookConfig;
+
+// ---------------------------------------------------------------------------
+// BookView events
+// ---------------------------------------------------------------------------
+
+pub enum BookViewEvent {
+    /// Request to open a file in the Notes tab (double-click chapter).
+    OpenFile(String),
+}
+
+impl EventEmitter<BookViewEvent> for BookView {}
 
 // ---------------------------------------------------------------------------
 // BookView
 // ---------------------------------------------------------------------------
 
 pub struct BookView {
-    vault_root: PathBuf,
-    config: Option<BookConfig>,
-    selected_nav_idx: usize,
+    pub vault_root: PathBuf,
+    pub config: Option<BookConfig>,
+    pub selected_nav_idx: usize,
     pages: Vec<Frame>,
     world: Option<Arc<Mutex<zt_typst::world::ZettelWorld>>>,
     pending_compile: Option<Task<()>>,
-    // Sidebar collapse / Cmd+B integration
-    pub sidebar_visible: bool,
-    // Inline title rename
-    renaming: bool,
-    title_input: Option<Entity<InputState>>,
 }
 
 impl BookView {
@@ -38,18 +42,10 @@ impl BookView {
             pages: Vec::new(),
             world: None,
             pending_compile: None,
-            sidebar_visible: true,
-            renaming: false,
-            title_input: None,
         };
 
         bv.load_chapter(0, cx);
         bv
-    }
-
-    pub fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
-        self.sidebar_visible = !self.sidebar_visible;
-        cx.notify();
     }
 
     fn navigable_count(&self) -> usize {
@@ -59,7 +55,7 @@ impl BookView {
             .unwrap_or(0)
     }
 
-    fn load_chapter(&mut self, nav_idx: usize, cx: &mut Context<Self>) {
+    pub fn load_chapter(&mut self, nav_idx: usize, cx: &mut Context<Self>) {
         let Some(ref config) = self.config else { return };
         let flat = config.flatten_chapters();
         let Some(chapter) = flat.get(nav_idx) else { return };
@@ -72,7 +68,7 @@ impl BookView {
         let source = match std::fs::read_to_string(&file_path) {
             Ok(s) => s,
             Err(e) => {
-                log::error!("BookView: failed to read {}: {}", file_path.display(), e);
+                tracing::error!("BookView: failed to read {}: {}", file_path.display(), e);
                 return;
             }
         };
@@ -127,85 +123,14 @@ impl BookView {
         self.pending_compile = Some(task);
     }
 
-    fn commit_rename(&mut self, new_title: String, cx: &mut Context<Self>) {
-        if let Some(ref mut config) = self.config {
-            config.title = new_title.clone();
-        }
-        // Persist to book.toml: replace the `title = "..."` line.
-        let toml_path = self.vault_root.join(".zetteltypsten/book.toml");
-        if toml_path.exists() {
-            if let Ok(content) = std::fs::read_to_string(&toml_path) {
-                let escaped = new_title.replace('\\', "\\\\").replace('"', "\\\"");
-                let updated = content
-                    .lines()
-                    .map(|line| {
-                        if line.trim_start().starts_with("title =") {
-                            format!("title = \"{}\"", escaped)
-                        } else {
-                            line.to_string()
-                        }
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                if let Err(e) = std::fs::write(&toml_path, updated) {
-                    log::error!("BookView: failed to save book.toml: {}", e);
-                }
-            }
-        }
-        self.renaming = false;
-        self.title_input = None;
+    /// Reload book.toml from disk and refresh the current chapter.
+    pub fn reload_config(&mut self, cx: &mut Context<Self>) {
+        self.config = BookConfig::load(&self.vault_root).ok();
+        let idx = self.selected_nav_idx;
+        self.load_chapter(idx, cx);
         cx.notify();
     }
-}
 
-// ---------------------------------------------------------------------------
-// Chapter tree builder (recursive, returns SidebarMenuItems)
-// ---------------------------------------------------------------------------
-
-fn build_chapter_items(
-    chapters: &[Chapter],
-    nav_counter: &mut usize,
-    selected: usize,
-    this: Entity<BookView>,
-) -> Vec<SidebarMenuItem> {
-    let mut items = Vec::new();
-    for ch in chapters {
-        let nav_idx = *nav_counter;
-        let is_draft = ch.is_draft();
-        if !is_draft {
-            *nav_counter += 1;
-        }
-
-        let label: SharedString = if ch.section_string().is_empty() {
-            ch.title.clone().into()
-        } else {
-            format!("{} {}", ch.section_string(), ch.title).into()
-        };
-
-        let mut item = SidebarMenuItem::new(label)
-            .icon(IconName::File)
-            .active(!is_draft && nav_idx == selected)
-            .disable(is_draft);
-
-        if !is_draft {
-            let entity = this.clone();
-            item = item.on_click(move |_ev, _window, cx| {
-                entity.update(cx, |bv, cx| {
-                    bv.selected_nav_idx = nav_idx;
-                    bv.load_chapter(nav_idx, cx);
-                    cx.notify();
-                });
-            });
-        }
-
-        if !ch.children.is_empty() {
-            let children = build_chapter_items(&ch.children, nav_counter, selected, this.clone());
-            item = item.children(children).default_open(true);
-        }
-
-        items.push(item);
-    }
-    items
 }
 
 // ---------------------------------------------------------------------------
@@ -213,7 +138,7 @@ fn build_chapter_items(
 // ---------------------------------------------------------------------------
 
 impl Render for BookView {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let surface0 = theme::surface0();
         let mantle = theme::mantle();
         let crust = theme::crust();
@@ -249,110 +174,6 @@ impl Render for BookView {
                     ),
                 );
         }
-
-        let config = self.config.as_ref().unwrap();
-        let book_title: SharedString = config.title.clone().into();
-        let this = cx.entity();
-
-        // ── Build chapter tree ───────────────────────────────────────────────
-        let mut nav_counter = 0usize;
-        let mut chapter_items: Vec<SidebarMenuItem> = Vec::new();
-
-        // Prefix chapters (no part header)
-        let prefix_items =
-            build_chapter_items(&config.prefix_chapters, &mut nav_counter, selected, this.clone());
-        chapter_items.extend(prefix_items);
-
-        // Parts
-        for part in &config.parts {
-            let part_title: SharedString = part.title.clone().into();
-            let part_ch_items =
-                build_chapter_items(&part.chapters, &mut nav_counter, selected, this.clone());
-            let part_item = SidebarMenuItem::new(part_title)
-                .icon(IconName::BookOpen)
-                .default_open(true)
-                .click_to_open(false)
-                .children(part_ch_items);
-            chapter_items.push(part_item);
-        }
-
-        // Suffix chapters
-        let suffix_items =
-            build_chapter_items(&config.suffix_chapters, &mut nav_counter, selected, this.clone());
-        chapter_items.extend(suffix_items);
-
-        // ── Sidebar title bar: book title / rename input ─────────────────────
-        let title_bar_content: AnyElement = if self.renaming {
-            // Lazily create InputState the first time renaming=true.
-            if self.title_input.is_none() {
-                let title_clone = book_title.clone();
-                let inp = cx.new(|cx| InputState::new(window, cx).default_value(title_clone));
-                cx.subscribe(&inp, |bv: &mut Self, state, ev: &InputEvent, cx| {
-                    match ev {
-                        InputEvent::PressEnter { .. } => {
-                            let val = state.read(cx).value().to_string();
-                            bv.commit_rename(val, cx);
-                        }
-                        InputEvent::Blur => {
-                            // Cancel on blur (discard edits)
-                            bv.renaming = false;
-                            bv.title_input = None;
-                            cx.notify();
-                        }
-                        _ => {}
-                    }
-                })
-                .detach();
-                self.title_input = Some(inp);
-            }
-            Input::new(self.title_input.as_ref().unwrap())
-                .into_any_element()
-        } else {
-            div()
-                .id("book-title-click")
-                .flex()
-                .items_center()
-                .gap(px(6.0))
-                .cursor_pointer()
-                .text_sm()
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(text_color)
-                .hover(|s| s.text_color(blue))
-                .on_click(cx.listener(|bv, _ev: &ClickEvent, _window, cx| {
-                    bv.renaming = true;
-                    cx.notify();
-                }))
-                .child(book_title.clone())
-                .into_any_element()
-        };
-
-        // ── Sidebar column ───────────────────────────────────────────────────
-        let sidebar_col = div()
-            .h_full()
-            .flex()
-            .flex_col()
-            .bg(crust)
-            .border_r_1()
-            .border_color(surface0)
-            // Title bar with book title / rename input
-            .child(
-                make_bar()
-                    .flex()
-                    .items_center()
-                    .px(px(12.0))
-                    .child(title_bar_content),
-            )
-            // Collapsible chapter tree
-            .child(
-                div()
-                    .flex_1()
-                    .overflow_hidden()
-                    .child(
-                        Sidebar::left()
-                            .collapsed(!self.sidebar_visible)
-                            .child(SidebarMenu::new().children(chapter_items)),
-                    ),
-            );
 
         // ── Content canvas ───────────────────────────────────────────────────
         let pages = self.pages.clone();
@@ -407,7 +228,7 @@ impl Render for BookView {
             .flex_row()
             .items_center()
             .justify_between()
-            .px(px(16.0))
+            .px(px(10.0))
             .border_t_1()
             .border_color(surface0)
             .bg(crust)
@@ -468,10 +289,9 @@ impl Render for BookView {
                 div().into_any_element()
             });
 
-        // ── Content column ───────────────────────────────────────────────────
-        let content_col = div()
-            .flex_1()
-            .h_full()
+        // ── Full layout: content only (chapter sidebar is in the workspace left panel) ──
+        div()
+            .size_full()
             .flex()
             .flex_col()
             .bg(mantle)
@@ -483,14 +303,6 @@ impl Render for BookView {
                     .overflow_y_scroll()
                     .child(content_canvas),
             )
-            .child(footer);
-
-        // ── Full layout ──────────────────────────────────────────────────────
-        div()
-            .size_full()
-            .flex()
-            .flex_row()
-            .child(sidebar_col)
-            .child(content_col)
+            .child(footer)
     }
 }

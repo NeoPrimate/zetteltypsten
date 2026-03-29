@@ -1,13 +1,14 @@
 mod theme;
 mod workspace;
-mod sidebar;
 mod file_tree;
 mod file_ops;
 mod editor;
 mod note_view;
 mod graph_view;
 mod book_view;
+pub mod components;
 pub mod typst_canvas;
+pub mod utils;
 
 pub use workspace::Workspace;
 pub use workspace::init;

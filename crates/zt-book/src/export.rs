@@ -131,7 +131,7 @@ pub fn export(book: &CompiledBook, output_dir: &Path) -> Result<()> {
         }
     }
 
-    log::info!("Book exported to {}", output_dir.display());
+    tracing::info!("Book exported to {}", output_dir.display());
     Ok(())
 }
 
@@ -540,20 +540,17 @@ mod tests {
 [book]
 title = "Test Book"
 
-[[prefix]]
+[[chapter]]
 title = "Intro"
 file = "intro.typ"
 
-[[part]]
-title = "Guide"
+[[chapter]]
+title = "Chapter 1"
+file = "ch1.typ"
 
-  [[part.chapter]]
-  title = "Chapter 1"
-  file = "ch1.typ"
-
-    [[part.chapter.sub]]
-    title = "Sub 1.1"
-    file = "gs/sub.typ"
+  [[chapter.sub]]
+  title = "Sub 1.1"
+  file = "gs/sub.typ"
 
 [output.html]
 default-theme = "dark"

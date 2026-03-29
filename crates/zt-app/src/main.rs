@@ -1,7 +1,9 @@
 use gpui::*;
 
 fn main() {
-    env_logger::init();
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .init();
 
     zt_typst::world::warm_font_cache();
 
@@ -167,13 +169,13 @@ fn main() {
             .map(|data| std::borrow::Cow::Borrowed(data))
             .collect();
         if let Err(e) = cx.text_system().add_fonts(typst_fonts) {
-            log::error!("Failed to register Typst fonts with GPUI: {e}");
+            tracing::error!("Failed to register Typst fonts with GPUI: {e}");
         }
 
         let vault_root = std::env::args().nth(1).map(std::path::PathBuf::from);
 
         if let Some(ref root) = vault_root {
-            log::info!("Vault root: {}", root.display());
+            tracing::info!("Vault root: {}", root.display());
         }
 
         let bounds = Bounds::centered(None, size(px(1400.0), px(900.0)), cx);

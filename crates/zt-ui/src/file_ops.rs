@@ -89,7 +89,7 @@ pub fn add_to_book(vault_root: &Path, rel_path: &str) -> Result<()> {
         .and_then(|s| s.to_str())
         .unwrap_or(rel_path);
     let addition = format!(
-        "\n[[suffix_chapters]]\ntitle = \"{}\"\nfile = \"{}\"\n",
+        "\n[[chapter]]\ntitle = \"{}\"\nfile = \"{}\"\n",
         stem, rel_path
     );
     if toml_path.exists() {

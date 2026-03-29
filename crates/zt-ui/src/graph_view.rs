@@ -1,5 +1,6 @@
 use crate::theme;
 use gpui::*;
+use gpui_component::slider::{SliderEvent, SliderState};
 use std::collections::HashMap;
 use std::f32::consts::PI;
 use std::path::PathBuf;
@@ -20,6 +21,8 @@ struct GraphNode {
     y: f32,
     /// Base radius in pixels (unscaled by zoom), grows logarithmically with in-degree.
     radius: f32,
+    /// Vault tags for this note.
+    tags: Vec<String>,
 }
 
 pub struct GraphView {
@@ -46,6 +49,31 @@ pub struct GraphView {
     build_task: Option<Task<()>>,
     /// Ticker task — runs for the lifetime of this view, steps sim at ~60 fps.
     sim_task: Option<Task<()>>,
+
+    // ── Display settings (drive rendering) ───────────────────────────────────
+    pub label_opacity: f32,    // 0.0–1.0, default 1.0
+    pub node_size_scale: f32,  // 0.3–3.0, default 1.0
+    pub edge_width: f32,       // 0.5–4.0, default 1.0
+
+    // ── Groups: (tag_name, color) ─────────────────────────────────────────────
+    pub tag_groups: Vec<(String, Hsla)>,
+
+    // ── All unique tags present in the graph (populated by rebuild) ───────────
+    pub all_tags: Vec<String>,
+
+    // ── Filter values (stored but NOT applied to rendering yet — deferred) ────
+    pub filter_tag: String,
+    pub filter_name: String,
+
+    // ── Accordion open/closed state ───────────────────────────────────────────
+    pub sidebar_filter_open: bool,
+    pub sidebar_groups_open: bool,
+    pub sidebar_display_open: bool,
+
+    // ── Slider entities (created once in new(), persist across renders) ────────
+    pub label_slider: Entity<SliderState>,
+    pub node_slider: Entity<SliderState>,
+    pub edge_slider: Entity<SliderState>,
 }
 
 const NODE_R: f32 = 16.0;
@@ -53,6 +81,58 @@ const PAD: f32 = 60.0;
 
 impl GraphView {
     pub fn new(vault_root: PathBuf, cx: &mut Context<Self>) -> Self {
+        let label_slider = cx.new(|_| {
+            SliderState::new()
+                .min(0.0)
+                .max(1.0)
+                .step(0.01)
+                .default_value(1.0f32)
+        });
+        let node_slider = cx.new(|_| {
+            SliderState::new()
+                .min(0.3)
+                .max(3.0)
+                .step(0.05)
+                .default_value(1.0f32)
+        });
+        let edge_slider = cx.new(|_| {
+            SliderState::new()
+                .min(0.5)
+                .max(4.0)
+                .step(0.1)
+                .default_value(1.0f32)
+        });
+
+        cx.subscribe(
+            &label_slider,
+            |gv: &mut GraphView, _, ev: &SliderEvent, cx| {
+                let SliderEvent::Change(v) = ev;
+                gv.label_opacity = v.start();
+                cx.notify();
+            },
+        )
+        .detach();
+
+        cx.subscribe(
+            &node_slider,
+            |gv: &mut GraphView, _, ev: &SliderEvent, cx| {
+                let SliderEvent::Change(v) = ev;
+                gv.node_size_scale = v.start();
+                cx.notify();
+            },
+        )
+        .detach();
+
+        cx.subscribe(
+            &edge_slider,
+            |gv: &mut GraphView, _, ev: &SliderEvent, cx| {
+                let SliderEvent::Change(v) = ev;
+                gv.edge_width = v.start();
+                cx.notify();
+            },
+        )
+        .detach();
+
         let mut gv = Self {
             vault_root,
             nodes: Vec::new(),
@@ -70,6 +150,19 @@ impl GraphView {
             node_screen_pos: Arc::new(Mutex::new(Vec::new())),
             build_task: None,
             sim_task: None,
+            label_opacity: 1.0,
+            node_size_scale: 1.0,
+            edge_width: 1.0,
+            tag_groups: Vec::new(),
+            all_tags: Vec::new(),
+            filter_tag: String::new(),
+            filter_name: String::new(),
+            sidebar_filter_open: false,
+            sidebar_groups_open: true,
+            sidebar_display_open: true,
+            label_slider,
+            node_slider,
+            edge_slider,
         };
         gv.rebuild(cx);
 
@@ -119,13 +212,13 @@ impl GraphView {
         let bg = cx.background_executor().clone();
 
         let task = cx.spawn(async move |this, cx| {
-            let (nodes, edges) = bg
+            let (nodes, edges, all_tags) = bg
                 .spawn(async move {
                     match zt_index::indexer::VaultIndex::build(&root) {
                         Ok(index) => build_graph_data(&index),
                         Err(e) => {
-                            log::error!("Graph index error: {e}");
-                            (Vec::new(), Vec::new())
+                            tracing::error!("Graph index error: {e}");
+                            (Vec::new(), Vec::new(), Vec::new())
                         }
                     }
                 })
@@ -136,6 +229,7 @@ impl GraphView {
                     let n = nodes.len();
                     gv.nodes = nodes;
                     gv.edges = edges;
+                    gv.all_tags = all_tags;
                     gv.vel = vec![(0.0, 0.0); n];
 
                     // Restore positions for nodes that existed before rebuild.
@@ -236,10 +330,10 @@ impl GraphView {
 
 fn build_graph_data(
     index: &zt_index::indexer::VaultIndex,
-) -> (Vec<GraphNode>, Vec<(usize, usize)>) {
+) -> (Vec<GraphNode>, Vec<(usize, usize)>, Vec<String>) {
     let all_ids: Vec<NoteId> = index.link_graph.all_notes().into_iter().cloned().collect();
     if all_ids.is_empty() {
-        return (Vec::new(), Vec::new());
+        return (Vec::new(), Vec::new(), Vec::new());
     }
 
     let n = all_ids.len();
@@ -276,17 +370,33 @@ fn build_graph_data(
             let r = if i % 2 == 0 { 0.6_f32 } else { 0.8_f32 };
             // Scale node visual radius logarithmically with in-degree.
             let radius = NODE_R * (1.0 + 0.5 * (in_degree[i] as f32 + 1.0).ln());
+            let tags: Vec<String> = index
+                .tag_index
+                .tags_for_note(id)
+                .into_iter()
+                .map(|t| t.as_str().to_string())
+                .collect();
             GraphNode {
                 rel_path,
                 title,
                 x: angle.cos() * r,
                 y: angle.sin() * r,
                 radius,
+                tags,
             }
         })
         .collect();
 
-    (nodes, edges)
+    // Collect all unique tags across the graph.
+    let mut all_tags: Vec<String> = index
+        .tag_index
+        .all_tags()
+        .into_iter()
+        .map(|t| t.as_str().to_string())
+        .collect();
+    all_tags.sort();
+
+    (nodes, edges, all_tags)
 }
 
 // ---------------------------------------------------------------------------
@@ -337,6 +447,30 @@ impl Render for GraphView {
         let zoom_snap = self.zoom;
         let pan_snap = self.pan;
 
+        // Display settings snapshots.
+        let label_opacity_snap = self.label_opacity;
+        let node_size_scale_snap = self.node_size_scale;
+        let edge_width_snap = self.edge_width;
+
+        // Precompute per-node colors from tag_groups.
+        let tag_groups_snap = self.tag_groups.clone();
+        let node_colors_snap: Vec<Hsla> = self
+            .nodes
+            .iter()
+            .map(|node| {
+                tag_groups_snap
+                    .iter()
+                    .find_map(|(tag, color)| {
+                        if node.tags.contains(tag) {
+                            Some(*color)
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or(blue)
+            })
+            .collect();
+
         let graph_canvas = canvas(
             move |bounds, _window, _cx| {
                 *bounds_arc.lock().unwrap() = Some(bounds);
@@ -376,7 +510,7 @@ impl Render for GraphView {
                     }
                     let (x1, y1) = abs[a];
                     let (x2, y2) = abs[b];
-                    let mut p = PathBuilder::stroke(px(1.0));
+                    let mut p = PathBuilder::stroke(px(edge_width_snap));
                     p.move_to(point(px(x1), px(y1)));
                     p.line_to(point(px(x2), px(y2)));
                     if let Ok(path) = p.build() {
@@ -387,14 +521,15 @@ impl Render for GraphView {
                 // Node circles — window-absolute coords, per-node radius.
                 for (idx, &(ax, ay)) in abs.iter().enumerate() {
                     let base_r = radii.get(idx).copied().unwrap_or(NODE_R);
-                    let r = (base_r * zoom_snap).clamp(4.0, 40.0);
+                    let r = (base_r * zoom_snap * node_size_scale_snap).clamp(4.0, 40.0);
+                    let node_color = node_colors_snap.get(idx).copied().unwrap_or(blue);
                     window.paint_quad(PaintQuad {
                         bounds: Bounds {
                             origin: point(px(ax - r), px(ay - r)),
                             size: size(px(r * 2.0), px(r * 2.0)),
                         },
                         corner_radii: Corners::all(px(r)),
-                        background: blue.into(),
+                        background: node_color.into(),
                         border_widths: Edges::all(px(0.0)),
                         border_color: Hsla::transparent_black(),
                         border_style: BorderStyle::Solid,
@@ -414,9 +549,10 @@ impl Render for GraphView {
                 Some(&p) => p,
                 None => continue,
             };
-            let node_r_scaled = (node.radius * self.zoom).clamp(4.0, 40.0);
+            let node_r_scaled = (node.radius * self.zoom * self.node_size_scale).clamp(4.0, 40.0);
 
-            // Label below circle.
+            // Label below circle — apply label opacity via text color alpha.
+            let label_color = text_color.opacity(label_opacity_snap);
             label_divs.push(
                 div()
                     .absolute()
@@ -426,7 +562,7 @@ impl Render for GraphView {
                     .flex()
                     .justify_center()
                     .text_xs()
-                    .text_color(text_color)
+                    .text_color(label_color)
                     .overflow_hidden()
                     .child(node.title.clone())
                     .into_any_element(),

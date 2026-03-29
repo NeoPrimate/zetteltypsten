@@ -16,8 +16,8 @@ impl Database {
         tx.execute("DELETE FROM labels WHERE note_id = ?1", [note_id])?;
         tx.execute("DELETE FROM refs WHERE source_id = ?1", [note_id])?;
 
-        // Extract title
-        let title = extractor::extract_title(source).unwrap_or_default();
+        // Title is always the file stem (note name), not the first heading.
+        let title = zt_core::note::NoteId(note_id.to_string()).display_name().to_string();
 
         // Upsert note
         tx.execute(
@@ -152,7 +152,7 @@ impl Database {
         // (because the target note hadn't been indexed yet)
         self.resolve_pending_refs()?;
 
-        log::info!("Database synced: {} notes updated", updated);
+        tracing::info!("Database synced: {} notes updated", updated);
         Ok(updated)
     }
 
@@ -217,7 +217,7 @@ Also @world reference.
                 r.get(0)
             })
             .unwrap();
-        assert_eq!(title, "My Note");
+        assert_eq!(title, "my-note");
 
         // Check tags
         let tags: Vec<String> = {

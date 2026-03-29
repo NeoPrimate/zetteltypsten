@@ -135,7 +135,7 @@ impl Editor {
         let source = self.input.read(cx).value().to_string();
         let path = self.vault_root.join(&self.rel_path);
         if let Err(e) = std::fs::write(&path, &source) {
-            log::error!("Failed to save {}: {}", path.display(), e);
+            tracing::error!("Failed to save {}: {}", path.display(), e);
         }
     }
 
@@ -268,30 +268,18 @@ impl Render for Editor {
         .w_full()
         .h(px(total_height));
 
-        let bar = div()
-            .w_full()
-            .h(px(crate::theme::TITLEBAR_H))
-            .bg(surface0);
-
-        let bar2 = div()
-            .w_full()
-            .h(px(crate::theme::TITLEBAR_H))
-            .bg(surface0);
-
         div()
             .size_full()
             .flex()
             .flex_row()
             .child(
-                // Left pane: bar on top, editor fills the rest
+                // Left pane: editor fills the full height (tab bar already provides top spacing)
                 div()
                     .flex()
                     .flex_col()
                     .w(relative(0.5))
                     .h_full()
-                    .border_r_1()
-                    .border_color(surface0)
-                    .child(bar)
+                    .bg(mantle)
                     .child(
                         div()
                             .flex_1()
@@ -305,14 +293,13 @@ impl Render for Editor {
                     ),
             )
             .child(
-                // Right pane: bar on top, scrollable preview fills the rest
+                // Right pane: scrollable preview fills the full height
                 div()
                     .flex()
                     .flex_col()
                     .flex_1()
                     .h_full()
                     .bg(mantle)
-                    .child(bar2)
                     .child(
                         div()
                             .id("preview-scroll")

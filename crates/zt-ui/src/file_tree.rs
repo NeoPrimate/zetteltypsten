@@ -1,5 +1,6 @@
 use crate::{file_ops, theme};
 use gpui::*;
+use zt_core::RelPath;
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::menu::{ContextMenuExt, PopupMenuItem};
 use std::collections::HashSet;
@@ -10,13 +11,13 @@ actions!(file_tree, [RenameSelected]);
 // ── Events ───────────────────────────────────────────────────────────────────
 
 pub enum FileTreeEvent {
-    OpenFile(String),
-    FileRenamed { old_rel: String, new_rel: String },
-    FileDeleted(String),
-    FileMoved { old_rel: String, new_rel: String },
-    FileCreated(String),
-    FolderDeleted(String),
-    FolderRenamed { old_rel: String, new_rel: String },
+    OpenFile(RelPath),
+    FileRenamed { old_rel: RelPath, new_rel: RelPath },
+    FileDeleted(RelPath),
+    FileMoved { old_rel: RelPath, new_rel: RelPath },
+    FileCreated(RelPath),
+    FolderDeleted(RelPath),
+    FolderRenamed { old_rel: RelPath, new_rel: RelPath },
 }
 
 impl EventEmitter<FileTreeEvent> for FileTree {}
@@ -93,17 +94,17 @@ impl FileTree {
                 Ok(new_rel) => {
                     if is_dir {
                         cx.emit(FileTreeEvent::FolderRenamed {
-                            old_rel: old_rel.clone(),
-                            new_rel,
+                            old_rel: RelPath::new(old_rel.clone()),
+                            new_rel: RelPath::new(new_rel),
                         });
                     } else {
                         cx.emit(FileTreeEvent::FileRenamed {
-                            old_rel: old_rel.clone(),
-                            new_rel,
+                            old_rel: RelPath::new(old_rel.clone()),
+                            new_rel: RelPath::new(new_rel),
                         });
                     }
                 }
-                Err(e) => log::error!("Rename failed: {}", e),
+                Err(e) => tracing::error!("Rename failed: {}", e),
             }
         }
         self.renaming = None;
@@ -113,8 +114,8 @@ impl FileTree {
 
     fn do_delete(&mut self, rel_path: String, cx: &mut Context<Self>) {
         match file_ops::delete_file(&self.vault_root, &rel_path) {
-            Ok(()) => cx.emit(FileTreeEvent::FileDeleted(rel_path)),
-            Err(e) => log::error!("Delete failed: {}", e),
+            Ok(()) => cx.emit(FileTreeEvent::FileDeleted(RelPath::new(rel_path))),
+            Err(e) => tracing::error!("Delete failed: {}", e),
         }
         cx.notify();
     }
@@ -122,15 +123,15 @@ impl FileTree {
     fn do_delete_folder(&mut self, rel_path: String, cx: &mut Context<Self>) {
         let full_path = self.vault_root.join(&rel_path);
         match std::fs::remove_dir_all(&full_path) {
-            Ok(()) => cx.emit(FileTreeEvent::FolderDeleted(rel_path)),
-            Err(e) => log::error!("Delete folder failed: {}", e),
+            Ok(()) => cx.emit(FileTreeEvent::FolderDeleted(RelPath::new(rel_path))),
+            Err(e) => tracing::error!("Delete folder failed: {}", e),
         }
         cx.notify();
     }
 
     fn do_add_to_book(&self, rel_path: &str) {
         if let Err(e) = file_ops::add_to_book(&self.vault_root, rel_path) {
-            log::error!("Add to book failed: {}", e);
+            tracing::error!("Add to book failed: {}", e);
         }
     }
 
@@ -141,8 +142,8 @@ impl FileTree {
             .find(|n| !root.join(n).exists())
             .unwrap_or_else(|| "untitled.typ".to_string());
         match file_ops::create_file(&self.vault_root, "", &name) {
-            Ok(rel) => cx.emit(FileTreeEvent::FileCreated(rel)),
-            Err(e) => log::error!("Create file failed: {}", e),
+            Ok(rel) => cx.emit(FileTreeEvent::FileCreated(RelPath::new(rel))),
+            Err(e) => tracing::error!("Create file failed: {}", e),
         }
         cx.notify();
     }
@@ -156,8 +157,8 @@ impl FileTree {
             .find(|n| !dir_path.join(n).exists())
             .unwrap_or_else(|| "untitled.typ".to_string());
         match file_ops::create_file(&self.vault_root, &dir, &name) {
-            Ok(rel) => cx.emit(FileTreeEvent::FileCreated(rel)),
-            Err(e) => log::error!("Create file in folder failed: {}", e),
+            Ok(rel) => cx.emit(FileTreeEvent::FileCreated(RelPath::new(rel))),
+            Err(e) => tracing::error!("Create file in folder failed: {}", e),
         }
         cx.notify();
     }
@@ -169,7 +170,7 @@ impl FileTree {
             .find(|n| !root.join(n).exists())
             .unwrap_or_else(|| "new-folder".to_string());
         if let Err(e) = file_ops::create_folder(&self.vault_root, "", &name) {
-            log::error!("Create folder failed: {}", e);
+            tracing::error!("Create folder failed: {}", e);
         }
         cx.notify();
     }
@@ -183,7 +184,7 @@ impl FileTree {
             .find(|n| !parent_path.join(n).exists())
             .unwrap_or_else(|| "new-folder".to_string());
         if let Err(e) = file_ops::create_folder(&self.vault_root, &parent, &name) {
-            log::error!("Create subfolder failed: {}", e);
+            tracing::error!("Create subfolder failed: {}", e);
         }
         cx.notify();
     }
@@ -266,30 +267,38 @@ impl Render for FileTree {
                     Ok(new_rel) => {
                         ft_root_drop.update(cx, |_, cx| {
                             cx.emit(FileTreeEvent::FileMoved {
-                                old_rel: old,
-                                new_rel,
+                                old_rel: RelPath::new(old),
+                                new_rel: RelPath::new(new_rel),
                             });
                             cx.notify();
                         });
                     }
-                    Err(e) => log::error!("Move to root failed: {}", e),
+                    Err(e) => tracing::error!("Move to root failed: {}", e),
                 }
             })
             .children(items)
-            .context_menu(move |menu, _, _| {
-                let ft_f = ft_cf.clone();
-                let ft_d = ft_cd.clone();
-                menu.item(
-                    PopupMenuItem::new("New File").on_click(move |_, _, cx| {
-                        ft_f.update(cx, |ft, cx| ft.do_create_file(cx));
+            // Spacer: right-clicking this empty area (below all items) shows New File / New Folder.
+            // The outer scroll div has NO context_menu so it cannot shadow the per-row menus above.
+            .child(
+                div()
+                    .id("file-tree-empty-area")
+                    .w_full()
+                    .min_h(px(120.0))
+                    .context_menu(move |menu, _, _| {
+                        let ft_f = ft_cf.clone();
+                        let ft_d = ft_cd.clone();
+                        menu.item(
+                            PopupMenuItem::new("New File").on_click(move |_, _, cx| {
+                                ft_f.update(cx, |ft, cx| ft.do_create_file(cx));
+                            }),
+                        )
+                        .item(
+                            PopupMenuItem::new("New Folder").on_click(move |_, _, cx| {
+                                ft_d.update(cx, |ft, cx| ft.do_create_folder(cx));
+                            }),
+                        )
                     }),
-                )
-                .item(
-                    PopupMenuItem::new("New Folder").on_click(move |_, _, cx| {
-                        ft_d.update(cx, |ft, cx| ft.do_create_folder(cx));
-                    }),
-                )
-            })
+            )
     }
 }
 
@@ -396,13 +405,13 @@ fn build_dir_items(
                             Ok(new_rel) => {
                                 ft_drop.update(cx, |_, cx| {
                                     cx.emit(FileTreeEvent::FileMoved {
-                                        old_rel: old,
-                                        new_rel,
+                                        old_rel: RelPath::new(old),
+                                        new_rel: RelPath::new(new_rel),
                                     });
                                     cx.notify();
                                 });
                             }
-                            Err(e) => log::error!("Move failed: {}", e),
+                            Err(e) => tracing::error!("Move failed: {}", e),
                         }
                     })
                     .on_click(move |_, window, cx| {
@@ -546,7 +555,7 @@ fn build_dir_items(
                         let r = rel_open.clone();
                         ft_open.update(cx, |ft, cx| {
                             ft.selected = Some(r.clone());
-                            cx.emit(FileTreeEvent::OpenFile(r));
+                            cx.emit(FileTreeEvent::OpenFile(RelPath::new(r)));
                         });
                     })
                     .context_menu(move |menu, _, _| {

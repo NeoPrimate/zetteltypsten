@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 // =============================================================================
@@ -20,26 +20,23 @@ pub struct BookConfig {
     pub build_dir: PathBuf,
     pub create_missing: bool,
     pub html: HtmlConfig,
-    // Chapter tree
-    pub prefix_chapters: Vec<Chapter>,
-    pub parts: Vec<Part>,
-    pub suffix_chapters: Vec<Chapter>,
-}
-
-/// A part groups numbered chapters under a title.
-#[derive(Debug, Clone)]
-pub struct Part {
-    pub title: String,
+    /// Flat list of top-level chapters (nesting via `children`).
     pub chapters: Vec<Chapter>,
 }
 
-/// A single chapter (may have nested sub-chapters).
+/// A single chapter / section (may have nested sub-sections).
+///
+/// `file` is `None` for section-only entries (structural headers with no content).
+/// `is_part` marks this as a non-interactive section divider (like mdBook's `# Part Title`).
 #[derive(Debug, Clone)]
 pub struct Chapter {
     pub title: String,
-    pub file: Option<PathBuf>,       // None = draft chapter
+    pub file: Option<PathBuf>,
     pub number: Option<SectionNumber>,
     pub children: Vec<Chapter>,
+    /// If true, this is a part title — a bold divider in the TOC with no content
+    /// and no nesting. It cannot contain children or be dragged into.
+    pub is_part: bool,
 }
 
 /// HTML output configuration.
@@ -80,105 +77,147 @@ pub struct FoldConfig {
 // TOML deserialization structs
 // =============================================================================
 
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Serialize, Default)]
 struct TomlRoot {
     #[serde(default)]
     book: TomlBook,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "TomlBuild::is_default")]
     build: TomlBuild,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "TomlOutput::is_default")]
     output: TomlOutput,
-    #[serde(default)]
-    prefix: Vec<TomlChapter>,
-    #[serde(default)]
-    part: Vec<TomlPart>,
-    #[serde(default)]
-    suffix: Vec<TomlChapter>,
-}
-
-#[derive(Deserialize, Default)]
-struct TomlBook {
-    title: Option<String>,
-    authors: Option<Vec<String>>,
-    description: Option<String>,
-    language: Option<String>,
-    src: Option<String>,
-}
-
-#[derive(Deserialize, Default)]
-struct TomlBuild {
-    #[serde(rename = "build-dir")]
-    build_dir: Option<String>,
-    #[serde(rename = "create-missing")]
-    create_missing: Option<bool>,
-}
-
-#[derive(Deserialize, Default)]
-struct TomlOutput {
-    #[serde(default)]
-    html: TomlHtml,
-}
-
-#[derive(Deserialize, Default)]
-struct TomlHtml {
-    #[serde(rename = "default-theme")]
-    default_theme: Option<String>,
-    #[serde(rename = "preferred-dark-theme")]
-    preferred_dark_theme: Option<String>,
-    #[serde(rename = "git-repository-url")]
-    git_repo_url: Option<String>,
-    #[serde(rename = "git-repository-icon")]
-    git_repo_icon: Option<String>,
-    #[serde(rename = "edit-url-template")]
-    edit_url_template: Option<String>,
-    #[serde(rename = "additional-css")]
-    additional_css: Option<Vec<String>>,
-    #[serde(rename = "additional-js")]
-    additional_js: Option<Vec<String>>,
-    #[serde(rename = "no-section-label")]
-    no_section_label: Option<bool>,
-    #[serde(rename = "site-url")]
-    site_url: Option<String>,
-    #[serde(default)]
-    search: TomlSearch,
-    #[serde(default)]
-    print: TomlPrint,
-    #[serde(default)]
-    fold: TomlFold,
-}
-
-#[derive(Deserialize, Default)]
-struct TomlSearch {
-    enable: Option<bool>,
-    #[serde(rename = "limit-results")]
-    limit_results: Option<u32>,
-}
-
-#[derive(Deserialize, Default)]
-struct TomlPrint {
-    enable: Option<bool>,
-}
-
-#[derive(Deserialize, Default)]
-struct TomlFold {
-    enable: Option<bool>,
-    level: Option<u8>,
-}
-
-#[derive(Deserialize, Clone)]
-struct TomlPart {
-    title: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     chapter: Vec<TomlChapter>,
 }
 
-#[derive(Deserialize, Clone)]
+#[derive(Deserialize, Serialize, Default)]
+struct TomlBook {
+    title: Option<String>,
+    authors: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    language: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    src: Option<String>,
+}
+
+#[derive(Deserialize, Serialize, Default)]
+struct TomlBuild {
+    #[serde(rename = "build-dir", skip_serializing_if = "Option::is_none")]
+    build_dir: Option<String>,
+    #[serde(rename = "create-missing", skip_serializing_if = "Option::is_none")]
+    create_missing: Option<bool>,
+}
+
+impl TomlBuild {
+    fn is_default(&self) -> bool {
+        self.build_dir.is_none() && self.create_missing.is_none()
+    }
+}
+
+#[derive(Deserialize, Serialize, Default)]
+struct TomlOutput {
+    #[serde(default, skip_serializing_if = "TomlHtml::is_default")]
+    html: TomlHtml,
+}
+
+impl TomlOutput {
+    fn is_default(&self) -> bool {
+        self.html.is_default()
+    }
+}
+
+#[derive(Deserialize, Serialize, Default)]
+struct TomlHtml {
+    #[serde(rename = "default-theme", skip_serializing_if = "Option::is_none")]
+    default_theme: Option<String>,
+    #[serde(rename = "preferred-dark-theme", skip_serializing_if = "Option::is_none")]
+    preferred_dark_theme: Option<String>,
+    #[serde(rename = "git-repository-url", skip_serializing_if = "Option::is_none")]
+    git_repo_url: Option<String>,
+    #[serde(rename = "git-repository-icon", skip_serializing_if = "Option::is_none")]
+    git_repo_icon: Option<String>,
+    #[serde(rename = "edit-url-template", skip_serializing_if = "Option::is_none")]
+    edit_url_template: Option<String>,
+    #[serde(rename = "additional-css", skip_serializing_if = "Option::is_none")]
+    additional_css: Option<Vec<String>>,
+    #[serde(rename = "additional-js", skip_serializing_if = "Option::is_none")]
+    additional_js: Option<Vec<String>>,
+    #[serde(rename = "no-section-label", skip_serializing_if = "Option::is_none")]
+    no_section_label: Option<bool>,
+    #[serde(rename = "site-url", skip_serializing_if = "Option::is_none")]
+    site_url: Option<String>,
+    #[serde(default, skip_serializing_if = "TomlSearch::is_default")]
+    search: TomlSearch,
+    #[serde(default, skip_serializing_if = "TomlPrint::is_default")]
+    print: TomlPrint,
+    #[serde(default, skip_serializing_if = "TomlFold::is_default")]
+    fold: TomlFold,
+}
+
+impl TomlHtml {
+    fn is_default(&self) -> bool {
+        self.default_theme.is_none()
+            && self.preferred_dark_theme.is_none()
+            && self.git_repo_url.is_none()
+            && self.git_repo_icon.is_none()
+            && self.edit_url_template.is_none()
+            && self.additional_css.is_none()
+            && self.additional_js.is_none()
+            && self.no_section_label.is_none()
+            && self.site_url.is_none()
+            && self.search.is_default()
+            && self.print.is_default()
+            && self.fold.is_default()
+    }
+}
+
+#[derive(Deserialize, Serialize, Default)]
+struct TomlSearch {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    enable: Option<bool>,
+    #[serde(rename = "limit-results", skip_serializing_if = "Option::is_none")]
+    limit_results: Option<u32>,
+}
+
+impl TomlSearch {
+    fn is_default(&self) -> bool { self.enable.is_none() && self.limit_results.is_none() }
+}
+
+#[derive(Deserialize, Serialize, Default)]
+struct TomlPrint {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    enable: Option<bool>,
+}
+
+impl TomlPrint {
+    fn is_default(&self) -> bool { self.enable.is_none() }
+}
+
+#[derive(Deserialize, Serialize, Default)]
+struct TomlFold {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    enable: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    level: Option<u8>,
+}
+
+impl TomlFold {
+    fn is_default(&self) -> bool { self.enable.is_none() && self.level.is_none() }
+}
+
+#[derive(Deserialize, Serialize, Clone)]
 struct TomlChapter {
     title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     file: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_false")]
+    part: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     sub: Vec<TomlChapter>,
 }
+
+fn is_false(b: &bool) -> bool { !*b }
 
 // =============================================================================
 // Implementation
@@ -194,22 +233,8 @@ impl BookConfig {
             .with_context(|| format!("Failed to parse {}", toml_path.display()))?;
 
         // Convert chapter tree
-        let prefix_chapters = raw.prefix.iter().map(|c| convert_chapter(c)).collect();
-        let suffix_chapters = raw.suffix.iter().map(|c| convert_chapter(c)).collect();
-
-        let mut parts: Vec<Part> = raw
-            .part
-            .iter()
-            .map(|p| Part {
-                title: p.title.clone(),
-                chapters: p.chapter.iter().map(|c| convert_chapter(c)).collect(),
-            })
-            .collect();
-
-        // Assign section numbers
-        for part in &mut parts {
-            assign_numbers(&mut part.chapters, &mut vec![]);
-        }
+        let mut chapters: Vec<Chapter> = raw.chapter.iter().map(|c| convert_chapter(c)).collect();
+        assign_numbers(&mut chapters, &mut vec![]);
 
         Ok(Self {
             title: raw.book.title.unwrap_or_else(|| "Untitled Book".into()),
@@ -263,10 +288,62 @@ impl BookConfig {
                     level: raw.output.html.fold.level.unwrap_or(0),
                 },
             },
-            prefix_chapters,
-            parts,
-            suffix_chapters,
+            chapters,
         })
+    }
+
+    /// Save the current configuration back to `.zetteltypsten/book.toml`.
+    pub fn save(&self, book_root: &Path) -> Result<()> {
+        let toml_root = self.to_toml();
+        let content = toml::to_string_pretty(&toml_root)
+            .context("Failed to serialize book config")?;
+        let path = book_root.join(".zetteltypsten/book.toml");
+        std::fs::write(&path, content)
+            .with_context(|| format!("Failed to write {}", path.display()))?;
+        Ok(())
+    }
+
+    fn to_toml(&self) -> TomlRoot {
+        let src_str = self.src.to_string_lossy().into_owned();
+        let build_str = self.build_dir.to_string_lossy().into_owned();
+        TomlRoot {
+            book: TomlBook {
+                title: Some(self.title.clone()),
+                authors: if self.authors.is_empty() { None } else { Some(self.authors.clone()) },
+                description: if self.description.is_empty() { None } else { Some(self.description.clone()) },
+                language: if self.language == "en" { None } else { Some(self.language.clone()) },
+                src: if src_str == "." { None } else { Some(src_str) },
+            },
+            build: TomlBuild {
+                build_dir: if build_str == "book" { None } else { Some(build_str) },
+                create_missing: if self.create_missing { None } else { Some(false) },
+            },
+            output: TomlOutput {
+                html: TomlHtml {
+                    default_theme: if self.html.default_theme == "dark" { None } else { Some(self.html.default_theme.clone()) },
+                    preferred_dark_theme: if self.html.preferred_dark_theme == "mocha" { None } else { Some(self.html.preferred_dark_theme.clone()) },
+                    git_repo_url: self.html.git_repo_url.clone(),
+                    git_repo_icon: if self.html.git_repo_icon == "fab-github" { None } else { Some(self.html.git_repo_icon.clone()) },
+                    edit_url_template: self.html.edit_url_template.clone(),
+                    additional_css: if self.html.additional_css.is_empty() { None } else { Some(self.html.additional_css.iter().map(|p| p.to_string_lossy().into_owned()).collect()) },
+                    additional_js: if self.html.additional_js.is_empty() { None } else { Some(self.html.additional_js.iter().map(|p| p.to_string_lossy().into_owned()).collect()) },
+                    no_section_label: if self.html.no_section_label { Some(true) } else { None },
+                    site_url: if self.html.site_url == "/" { None } else { Some(self.html.site_url.clone()) },
+                    search: TomlSearch {
+                        enable: if self.html.search.enable { None } else { Some(false) },
+                        limit_results: if self.html.search.limit_results == 30 { None } else { Some(self.html.search.limit_results) },
+                    },
+                    print: TomlPrint {
+                        enable: if self.html.print.enable { None } else { Some(false) },
+                    },
+                    fold: TomlFold {
+                        enable: if self.html.fold.enable { Some(true) } else { None },
+                        level: if self.html.fold.level == 0 { None } else { Some(self.html.fold.level) },
+                    },
+                },
+            },
+            chapter: self.chapters.iter().map(chapter_to_toml).collect(),
+        }
     }
 
     /// Create a default config (no book.toml file).
@@ -299,24 +376,14 @@ impl BookConfig {
                     level: 0,
                 },
             },
-            prefix_chapters: vec![],
-            parts: vec![],
-            suffix_chapters: vec![],
+            chapters: vec![],
         }
     }
 
     /// Get a flat list of all chapters with content (for prev/next navigation).
     pub fn flatten_chapters(&self) -> Vec<&Chapter> {
         let mut result = Vec::new();
-        for ch in &self.prefix_chapters {
-            flatten(ch, &mut result);
-        }
-        for part in &self.parts {
-            for ch in &part.chapters {
-                flatten(ch, &mut result);
-            }
-        }
-        for ch in &self.suffix_chapters {
+        for ch in &self.chapters {
             flatten(ch, &mut result);
         }
         result
@@ -338,6 +405,16 @@ fn convert_chapter(raw: &TomlChapter) -> Chapter {
         file: raw.file.as_ref().map(PathBuf::from),
         number: None,
         children: raw.sub.iter().map(|c| convert_chapter(c)).collect(),
+        is_part: raw.part,
+    }
+}
+
+fn chapter_to_toml(ch: &Chapter) -> TomlChapter {
+    TomlChapter {
+        title: ch.title.clone(),
+        file: ch.file.as_ref().map(|f| f.to_string_lossy().into_owned()),
+        part: ch.is_part,
+        sub: ch.children.iter().map(chapter_to_toml).collect(),
     }
 }
 
@@ -365,9 +442,147 @@ impl Chapter {
         }
     }
 
-    /// Is this a draft chapter (no file)?
+    /// Is this a section-only entry (no file)?
     pub fn is_draft(&self) -> bool {
         self.file.is_none()
+    }
+}
+
+// =============================================================================
+// Chapter location + structural mutations
+// =============================================================================
+
+/// Identifies a chapter's position in the book tree as a path of indices.
+///
+/// `path` is non-empty: `path[0]` indexes into `BookConfig::chapters`,
+/// each subsequent element indexes into `.children`.
+/// E.g. `[2, 0, 1]` = `chapters[2].children[0].children[1]`.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ChapterLoc {
+    pub path: Vec<usize>,
+}
+
+impl ChapterLoc {
+    pub fn new(path: Vec<usize>) -> Self { Self { path } }
+
+    pub fn root(index: usize) -> Self { Self { path: vec![index] } }
+
+    /// Stable string key for HashSets.
+    pub fn key(&self) -> String {
+        self.path.iter().map(|i| i.to_string()).collect::<Vec<_>>().join("/")
+    }
+
+    /// Create a child loc by appending an index.
+    pub fn child(&self, index: usize) -> Self {
+        let mut p = self.path.clone();
+        p.push(index);
+        Self { path: p }
+    }
+}
+
+impl BookConfig {
+    // ── Accessors ────────────────────────────────────────────────────────────
+
+    /// Get the sibling list and index for the chapter at `loc`.
+    fn sibling_list_and_index(&self, loc: &ChapterLoc) -> Option<(&Vec<Chapter>, usize)> {
+        if loc.path.is_empty() { return None; }
+        if loc.path.len() == 1 {
+            return Some((&self.chapters, loc.path[0]));
+        }
+        let mut list = &self.chapters;
+        for &idx in &loc.path[..loc.path.len() - 2] {
+            list = &list.get(idx)?.children;
+        }
+        let parent_idx = loc.path[loc.path.len() - 2];
+        Some((&list.get(parent_idx)?.children, *loc.path.last()?))
+    }
+
+    fn sibling_list_and_index_mut(&mut self, loc: &ChapterLoc) -> Option<(&mut Vec<Chapter>, usize)> {
+        if loc.path.is_empty() { return None; }
+        if loc.path.len() == 1 {
+            return Some((&mut self.chapters, loc.path[0]));
+        }
+        let mut list = &mut self.chapters;
+        for &idx in &loc.path[..loc.path.len() - 2] {
+            list = &mut list.get_mut(idx)?.children;
+        }
+        let parent_idx = loc.path[loc.path.len() - 2];
+        let last = *loc.path.last()?;
+        Some((&mut list.get_mut(parent_idx)?.children, last))
+    }
+
+    pub fn chapter_at(&self, loc: &ChapterLoc) -> Option<&Chapter> {
+        let (list, idx) = self.sibling_list_and_index(loc)?;
+        list.get(idx)
+    }
+
+    pub fn chapter_at_mut(&mut self, loc: &ChapterLoc) -> Option<&mut Chapter> {
+        let (list, idx) = self.sibling_list_and_index_mut(loc)?;
+        list.get_mut(idx)
+    }
+
+    // ── Mutations ────────────────────────────────────────────────────────────
+
+    pub fn move_chapter(&mut self, loc: &ChapterLoc, delta: isize) -> bool {
+        let Some((list, idx)) = self.sibling_list_and_index_mut(loc) else { return false };
+        let new_idx = idx as isize + delta;
+        if new_idx < 0 || new_idx as usize >= list.len() { return false; }
+        let ch = list.remove(idx);
+        list.insert(new_idx as usize, ch);
+        true
+    }
+
+    pub fn remove_chapter(&mut self, loc: &ChapterLoc) -> Option<Chapter> {
+        let (list, idx) = self.sibling_list_and_index_mut(loc)?;
+        if idx >= list.len() { return None; }
+        Some(list.remove(idx))
+    }
+
+    pub fn insert_chapter(&mut self, loc: &ChapterLoc, ch: Chapter) {
+        if let Some((list, idx)) = self.sibling_list_and_index_mut(loc) {
+            let idx = idx.min(list.len());
+            list.insert(idx, ch);
+        }
+    }
+
+    pub fn renumber(&mut self) {
+        assign_numbers(&mut self.chapters, &mut vec![]);
+    }
+
+    pub fn save_renumbered(&mut self, book_root: &Path) -> Result<()> {
+        self.renumber();
+        self.save(book_root)
+    }
+
+    /// After removing an item at `removed`, adjust `target` location if the
+    /// removal shifted its index within the same sibling list.
+    ///
+    /// Call this AFTER `remove_chapter(removed)` but BEFORE `insert_chapter(target, ch)`.
+    pub fn adjust_loc_after_removal(target: &ChapterLoc, removed: &ChapterLoc) -> ChapterLoc {
+        let mut adjusted = target.path.clone();
+        let rp = &removed.path;
+
+        // Only adjust if they share the same parent
+        // (i.e., the removal affected the same sibling list the target is in)
+        if rp.len() > adjusted.len() {
+            // Removed is deeper than target — no effect on target's sibling list
+            return ChapterLoc::new(adjusted);
+        }
+
+        let parent_len = rp.len() - 1;
+        if parent_len > adjusted.len() - 1 {
+            return ChapterLoc::new(adjusted);
+        }
+
+        // Check that the parent path matches
+        if rp[..parent_len] == adjusted[..parent_len] {
+            let removed_idx = rp[parent_len];
+            if adjusted[parent_len] > removed_idx {
+                adjusted[parent_len] -= 1;
+            }
+        }
+
+        ChapterLoc::new(adjusted)
     }
 }
 
@@ -381,8 +596,8 @@ mod tests {
     use std::fs;
 
     #[test]
-    fn parse_unified_book_toml() {
-        let tmp = std::env::temp_dir().join("zt-book-unified-test");
+    fn parse_book_toml() {
+        let tmp = std::env::temp_dir().join("zt-book-test");
         let _ = fs::remove_dir_all(&tmp);
         fs::create_dir_all(tmp.join(".zetteltypsten")).unwrap();
 
@@ -392,45 +607,34 @@ mod tests {
 [book]
 title = "My Book"
 authors = ["Alice", "Bob"]
-language = "en"
 
 [build]
 build-dir = "output"
 
-[[prefix]]
+[[chapter]]
 title = "Introduction"
 file = "intro.typ"
 
-[[part]]
-title = "User Guide"
+[[chapter]]
+title = "Getting Started"
+file = "getting-started.typ"
 
-  [[part.chapter]]
-  title = "Getting Started"
-  file = "getting-started.typ"
+  [[chapter.sub]]
+  title = "Installation"
+  file = "gs/install.typ"
 
-    [[part.chapter.sub]]
-    title = "Installation"
-    file = "gs/install.typ"
+  [[chapter.sub]]
+  title = "First Note"
+  file = "gs/first-note.typ"
 
-    [[part.chapter.sub]]
-    title = "First Note"
-    file = "gs/first-note.typ"
+[[chapter]]
+title = "Features"
+file = "features.typ"
 
-  [[part.chapter]]
-  title = "Features"
-  file = "features.typ"
+[[chapter]]
+title = "Draft Section"
 
-  [[part.chapter]]
-  title = "Draft Chapter"
-
-[[part]]
-title = "Reference"
-
-  [[part.chapter]]
-  title = "Configuration"
-  file = "ref/config.typ"
-
-[[suffix]]
+[[chapter]]
 title = "Appendix"
 file = "appendix.typ"
 
@@ -448,44 +652,31 @@ limit-results = 20
 
         let config = BookConfig::load(&tmp).unwrap();
 
-        // Metadata
         assert_eq!(config.title, "My Book");
         assert_eq!(config.authors.len(), 2);
         assert_eq!(config.build_dir, PathBuf::from("output"));
 
-        // Prefix
-        assert_eq!(config.prefix_chapters.len(), 1);
-        assert_eq!(config.prefix_chapters[0].title, "Introduction");
+        // 5 top-level chapters
+        assert_eq!(config.chapters.len(), 5);
+        assert_eq!(config.chapters[0].title, "Introduction");
 
-        // Parts
-        assert_eq!(config.parts.len(), 2);
-        assert_eq!(config.parts[0].title, "User Guide");
-        assert_eq!(config.parts[0].chapters.len(), 3);
-
-        // Nested chapters
-        let gs = &config.parts[0].chapters[0];
+        // Nested sub-chapters
+        let gs = &config.chapters[1];
         assert_eq!(gs.title, "Getting Started");
-        assert_eq!(gs.section_string(), "1.");
+        assert_eq!(gs.section_string(), "2.");
         assert_eq!(gs.children.len(), 2);
         assert_eq!(gs.children[0].title, "Installation");
-        assert_eq!(gs.children[0].section_string(), "1.1.");
-        assert_eq!(gs.children[1].section_string(), "1.2.");
+        assert_eq!(gs.children[0].section_string(), "2.1.");
+        assert_eq!(gs.children[1].section_string(), "2.2.");
 
         // Draft
-        let draft = &config.parts[0].chapters[2];
+        let draft = &config.chapters[3];
         assert!(draft.is_draft());
-        assert_eq!(draft.section_string(), "3.");
+        assert_eq!(draft.section_string(), "4.");
 
-        // Second part
-        assert_eq!(config.parts[1].chapters[0].section_string(), "1.");
-
-        // Suffix
-        assert_eq!(config.suffix_chapters.len(), 1);
-
-        // Flattened chapters (non-draft, with files)
-        // intro + getting-started + install + first-note + features + config + appendix = 7
+        // Flattened (non-draft, with files): intro + gs + install + first-note + features + appendix = 6
         let flat = config.flatten_chapters();
-        assert_eq!(flat.len(), 7);
+        assert_eq!(flat.len(), 6);
 
         // HTML config
         assert_eq!(config.html.default_theme, "dark");

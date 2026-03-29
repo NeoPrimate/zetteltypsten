@@ -49,10 +49,21 @@ pub struct Note {
     pub modified_at: SystemTime,
 }
 
+/// A single heading entry extracted from note source.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct HeadingEntry {
+    /// Nesting level: 1 for `=`, 2 for `==`, etc.
+    pub depth: usize,
+    /// Heading text with labels and whitespace trimmed.
+    pub text: String,
+}
+
 pub struct NoteMetadata {
     pub tags: Vec<Tag>,
     pub outgoing_links: Vec<Link>,
     pub aliases: Vec<String>,
+    /// Ordered list of headings, used to build the outline sidebar.
+    pub headings: Vec<HeadingEntry>,
 }
 
 impl NoteMetadata {
@@ -61,14 +72,16 @@ impl NoteMetadata {
             tags: Vec::new(),
             outgoing_links: Vec::new(),
             aliases: Vec::new(),
+            headings: Vec::new(),
         }
     }
 }
 
 impl Note {
     /// Create a new note from raw file content.
+    /// Title is always the file stem (note name), not the first heading.
     pub fn from_content(id: NoteId, content: String) -> Self {
-        let title = extract_title(&content).unwrap_or_else(|| id.display_name().to_string());
+        let title = id.display_name().to_string();
         Self {
             id,
             title,
