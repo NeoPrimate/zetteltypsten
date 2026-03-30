@@ -112,6 +112,8 @@ pub struct Workspace {
     /// Item being renamed inline in the book panel: (key, input_state).
     /// Key is either a ChapterLoc key or "part-N" for parts.
     pub(self) book_renaming: Option<(String, Entity<gpui_component::input::InputState>)>,
+    /// Item being renamed inline in the PDF docs panel: (old_filename, input_state).
+    pub(self) pdf_renaming: Option<(String, Entity<gpui_component::input::InputState>)>,
     /// Shared vault-wide compiled document.
     pub(self) vault_doc: Option<Arc<Mutex<zt_typst::vault_doc::VaultDocument>>>,
 }
@@ -185,6 +187,7 @@ impl Workspace {
             startup_done: false,
             expanded_book_chapters: std::collections::HashSet::new(),
             book_renaming: None,
+            pdf_renaming: None,
             vault_doc,
         }
     }
@@ -651,9 +654,9 @@ impl Render for Workspace {
             .border_color(surface0)
             .child(div().w_full().h(px(theme::TITLEBAR_H)).bg(surface0))
             .child(make_activity_btn("act-notes", "icons/file.svg", ActiveTab::Notes, cx))
-            .child(make_activity_btn("act-graph", "icons/map.svg", ActiveTab::Graph, cx))
+            .child(make_activity_btn("act-graph", "icons/network.svg", ActiveTab::Graph, cx))
             .child(make_activity_btn("act-book", "icons/book-open.svg", ActiveTab::Book, cx))
-            .child(make_activity_btn("act-pdf", "icons/eye.svg", ActiveTab::Pdf, cx));
+            .child(make_activity_btn("act-pdf", "icons/pdf-file.svg", ActiveTab::Pdf, cx));
 
         // ── Left sidebar ──────────────────────────────────────────────────────
         let vault_name = self
@@ -846,6 +849,7 @@ impl Render for Workspace {
                     .flex()
                     .flex_col()
                     .overflow_hidden()
+                    .child(div().w_full().h(px(theme::TITLEBAR_H)).bg(surface0))
                     .child(pdf_content)
             }
         };

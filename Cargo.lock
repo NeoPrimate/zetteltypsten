@@ -9893,6 +9893,7 @@ dependencies = [
  "gpui",
  "gpui-component",
  "gpui-component-assets",
+ "rust-embed",
  "tracing",
  "tracing-subscriber",
  "typst-assets",

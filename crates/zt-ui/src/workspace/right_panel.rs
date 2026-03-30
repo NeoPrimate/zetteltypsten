@@ -925,14 +925,35 @@ impl Workspace {
         let doc_list = self.pdf_doc_list.clone();
         let active_doc = self.active_pdf_doc.clone();
 
-        // ── Document list ────────────────────────────────────────────────────
-        let mut doc_rows: Vec<AnyElement> = doc_list
+        // ── Document rows ───────────────────────────────────────────────────
+        let doc_rows: Vec<AnyElement> = doc_list
             .iter()
             .map(|name| {
                 let is_active = name == &active_doc;
                 let label = name.trim_end_matches(".typ").to_string();
                 let name_click = name.clone();
-                let ws = cx.entity().clone();
+                let name_rename = name.clone();
+                let name_delete = name.clone();
+                let name_rename2 = name.clone();
+                let ws_click = cx.entity().clone();
+                let ws_ctx = cx.entity().clone();
+                let ws_rename_ctx = cx.entity().clone();
+
+                // Check if this row is being renamed
+                let is_renaming = self.pdf_renaming.as_ref()
+                    .map(|(n, _)| n == name).unwrap_or(false);
+
+                if is_renaming {
+                    // Render inline rename input
+                    let inp = self.pdf_renaming.as_ref().unwrap().1.clone();
+                    return div()
+                        .id(SharedString::from(format!("pdf-doc-{name}")))
+                        .w_full()
+                        .px(px(8.0))
+                        .py(px(2.0))
+                        .child(Input::new(&inp).appearance(false).size_full().text_size(px(13.0)))
+                        .into_any_element();
+                }
 
                 div()
                     .id(SharedString::from(format!("pdf-doc-{name}")))
@@ -945,44 +966,96 @@ impl Workspace {
                     .bg(if is_active { theme::surface0() } else { gpui::transparent_black() })
                     .hover(|s| s.bg(theme::surface0()))
                     .on_click(move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
-                        ws.update(cx, |ws, cx| {
+                        ws_click.update(cx, |ws, cx| {
                             ws.load_pdf_doc(&name_click, window, cx);
                         });
+                    })
+                    .on_key_down(move |ev: &KeyDownEvent, window: &mut Window, cx: &mut App| {
+                        if ev.keystroke.key == "enter" {
+                            ws_rename_ctx.update(cx, |ws, cx| {
+                                ws.start_pdf_rename(&name_rename2, window, cx);
+                            });
+                        }
+                    })
+                    .context_menu({
+                        move |menu, _, _| {
+                            let ws_r = ws_ctx.clone();
+                            let nr = name_rename.clone();
+                            let ws_d = ws_ctx.clone();
+                            let nd = name_delete.clone();
+                            menu.item(
+                                PopupMenuItem::new("Rename").on_click(move |_, window, cx| {
+                                    ws_r.update(cx, |ws, cx| {
+                                        ws.start_pdf_rename(&nr, window, cx);
+                                    });
+                                }),
+                            )
+                            .item(
+                                PopupMenuItem::new("Delete").on_click(move |_, _, cx| {
+                                    ws_d.update(cx, |ws, cx| {
+                                        ws.delete_pdf_doc(&nd, cx);
+                                    });
+                                }),
+                            )
+                        }
                     })
                     .child(label)
                     .into_any_element()
             })
             .collect();
 
-        // "+" button to create new document
+        // ── Header with + button ────────────────────────────────────────────
         let ws_add = cx.entity().clone();
-        doc_rows.push(
-            div()
-                .id("pdf-doc-new")
-                .w_full()
-                .px(px(12.0))
-                .py(px(4.0))
-                .text_sm()
-                .cursor_pointer()
-                .text_color(subtext)
-                .hover(|s| s.text_color(text_color))
-                .on_click(move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
-                    ws_add.update(cx, |ws, cx| {
-                        let Some(ref root) = ws.vault_root else { return };
-                        let doc_dir = root.join(".zetteltypsten/documents");
-                        let _ = std::fs::create_dir_all(&doc_dir);
-                        let name = (1usize..)
-                            .map(|i| format!("document-{i}.typ"))
-                            .find(|n| !doc_dir.join(n).exists())
-                            .unwrap_or_else(|| "document.typ".into());
-                        let _ = std::fs::write(doc_dir.join(&name), "");
-                        ws.scan_pdf_docs();
-                        ws.load_pdf_doc(&name, window, cx);
-                    });
-                })
-                .child("+ New Document")
-                .into_any_element(),
-        );
+        let header = div()
+            .w_full()
+            .px(px(12.0))
+            .py(px(6.0))
+            .flex()
+            .items_center()
+            .gap(px(6.0))
+            .border_b_1()
+            .border_color(surface0)
+            .child(Icon::new(IconName::File).size_4().text_color(subtext))
+            .child(
+                div()
+                    .flex_1()
+                    .text_sm()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(text_color)
+                    .child("Documents"),
+            )
+            .child(
+                div()
+                    .id("pdf-add-doc")
+                    .cursor_pointer()
+                    .text_color(subtext)
+                    .hover(|s| s.text_color(theme::text()))
+                    .on_click(move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
+                        ws_add.update(cx, |ws, cx| {
+                            let Some(ref root) = ws.vault_root else { return };
+                            let doc_dir = root.join(".zetteltypsten/documents");
+                            let _ = std::fs::create_dir_all(&doc_dir);
+                            let name = (1usize..)
+                                .map(|i| format!("document-{i}.typ"))
+                                .find(|n| !doc_dir.join(n).exists())
+                                .unwrap_or_else(|| "document.typ".into());
+                            let _ = std::fs::write(doc_dir.join(&name), "");
+                            ws.scan_pdf_docs();
+                            ws.load_pdf_doc(&name, window, cx);
+                            // Auto-start rename on the new doc
+                            let new_name = name.clone();
+                            ws.start_pdf_rename(&new_name, window, cx);
+                        });
+                    })
+                    .child(Icon::new(IconName::Plus).size_4()),
+            );
+
+        let doc_list_el = div()
+            .id("pdf-doc-list-scroll")
+            .flex_1()
+            .overflow_y_scroll()
+            .py(px(4.0))
+            .children(doc_rows);
 
         Some(
             div()
@@ -993,33 +1066,8 @@ impl Workspace {
                 .flex_shrink_0()
                 .bg(theme::mantle())
                 .child(div().w_full().h(px(theme::TITLEBAR_H)).bg(theme::surface0()))
-                .child(
-                    div()
-                        .w_full()
-                        .px(px(12.0))
-                        .py(px(6.0))
-                        .flex()
-                        .items_center()
-                        .gap(px(6.0))
-                        .border_b_1()
-                        .border_color(surface0)
-                        .child(Icon::new(IconName::File).size_4().text_color(subtext))
-                        .child(
-                            div()
-                                .text_sm()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(text_color)
-                                .child("Documents"),
-                        ),
-                )
-                .child(
-                    div()
-                        .id("pdf-doc-list-scroll")
-                        .flex_1()
-                        .overflow_y_scroll()
-                        .py(px(4.0))
-                        .children(doc_rows),
-                )
+                .child(header)
+                .child(doc_list_el)
                 .child({
                     let ws_export = cx.entity().clone();
                     div()
@@ -1060,6 +1108,77 @@ impl Workspace {
                 })
                 .into_any_element(),
         )
+    }
+
+    /// Start inline rename of a PDF document.
+    fn start_pdf_rename(&mut self, filename: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let stem = filename.trim_end_matches(".typ");
+        let inp = cx.new(|cx| InputState::new(window, cx).default_value(stem.to_string()));
+        inp.update(cx, |s, cx| s.focus(window, cx));
+        let old_name = filename.to_string();
+        cx.subscribe(&inp, move |ws: &mut Workspace, state, ev: &InputEvent, cx| {
+            match ev {
+                InputEvent::PressEnter { .. } => {
+                    let new_stem = state.read(cx).value().to_string();
+                    let new_stem = new_stem.trim().to_string();
+                    if !new_stem.is_empty() {
+                        ws.commit_pdf_rename(&old_name, &new_stem, cx);
+                    }
+                    ws.pdf_renaming = None;
+                    cx.notify();
+                }
+                InputEvent::Blur => {
+                    let new_stem = state.read(cx).value().to_string();
+                    let new_stem = new_stem.trim().to_string();
+                    if !new_stem.is_empty() {
+                        ws.commit_pdf_rename(&old_name, &new_stem, cx);
+                    }
+                    ws.pdf_renaming = None;
+                    cx.notify();
+                }
+                _ => {}
+            }
+        }).detach();
+        self.pdf_renaming = Some((filename.to_string(), inp));
+        cx.notify();
+    }
+
+    /// Commit a PDF document rename.
+    fn commit_pdf_rename(&mut self, old_filename: &str, new_stem: &str, cx: &mut Context<Self>) {
+        let Some(ref root) = self.vault_root else { return };
+        let doc_dir = root.join(".zetteltypsten/documents");
+        let new_filename = format!("{new_stem}.typ");
+        if new_filename == old_filename { return; }
+        let old_path = doc_dir.join(old_filename);
+        let new_path = doc_dir.join(&new_filename);
+        if new_path.exists() { return; } // don't overwrite
+        if let Err(e) = std::fs::rename(&old_path, &new_path) {
+            tracing::error!("PDF doc rename failed: {e}");
+            return;
+        }
+        self.scan_pdf_docs();
+        if self.active_pdf_doc == old_filename {
+            self.active_pdf_doc = new_filename;
+        }
+        cx.notify();
+    }
+
+    /// Delete a PDF document.
+    fn delete_pdf_doc(&mut self, filename: &str, cx: &mut Context<Self>) {
+        let Some(ref root) = self.vault_root else { return };
+        let doc_dir = root.join(".zetteltypsten/documents");
+        let path = doc_dir.join(filename);
+        if let Err(e) = std::fs::remove_file(&path) {
+            tracing::error!("PDF doc delete failed: {e}");
+            return;
+        }
+        self.scan_pdf_docs();
+        // If deleted the active doc, switch to first or clear
+        if self.active_pdf_doc == filename {
+            self.active_pdf_doc.clear();
+            self.pdf_editor = None;
+        }
+        cx.notify();
     }
 }
 

@@ -478,6 +478,7 @@ impl Render for NoteView {
                         .id("note-scroll")
                         .flex_1()
                         .overflow_y_scroll()
+                        .pt(px(48.0))
                         .track_scroll(&self.scroll_handle)
                         .on_mouse_down(
                             MouseButton::Left,

@@ -1,4 +1,39 @@
 use gpui::*;
+use std::borrow::Cow;
+
+/// Custom icons embedded from assets/icons/.
+#[derive(rust_embed::RustEmbed)]
+#[folder = "../../assets"]
+#[include = "icons/**/*.svg"]
+struct AppAssets;
+
+/// Combined asset source: checks app assets first, then gpui-component's.
+struct CombinedAssets;
+
+impl AssetSource for CombinedAssets {
+    fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
+        // Try our custom icons first
+        if let Some(f) = AppAssets::get(path) {
+            return Ok(Some(f.data));
+        }
+        // Fall back to gpui-component's bundled assets
+        gpui_component_assets::Assets.load(path)
+    }
+
+    fn list(&self, path: &str) -> Result<Vec<SharedString>> {
+        let mut items: Vec<SharedString> = AppAssets::iter()
+            .filter_map(|p| p.starts_with(path).then(|| p.into()))
+            .collect();
+        if let Ok(more) = gpui_component_assets::Assets.list(path) {
+            for m in more {
+                if !items.contains(&m) {
+                    items.push(m);
+                }
+            }
+        }
+        Ok(items)
+    }
+}
 
 fn main() {
     tracing_subscriber::fmt()
@@ -8,7 +43,7 @@ fn main() {
     zt_typst::world::warm_font_cache();
 
     Application::new()
-        .with_assets(gpui_component_assets::Assets)
+        .with_assets(CombinedAssets)
         .run(|cx: &mut App| {
         gpui_component::init(cx);
 
