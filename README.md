@@ -14,7 +14,7 @@
 
 <p align="center"><em>Free, Open Source, Privacy First.</em></p>
 
-## 🚀 Features
+## Features
 
 ### 🔗 Zettelsten
 
