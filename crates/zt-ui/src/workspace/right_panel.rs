@@ -6,7 +6,6 @@
 use super::{graph_sidebar, ActiveTab, RightPanel, Workspace};
 use crate::book_view::BookView;
 use crate::components::{sidebar_item, tag_badge};
-use crate::file_ops;
 use crate::theme;
 use gpui::*;
 use gpui_component::input::{Input, InputEvent, InputState};
@@ -47,7 +46,6 @@ impl Workspace {
             return self.render_pdf_right_panel(cx);
         }
 
-        let text_color = theme::text();
         let subtext = theme::subtext0();
         let surface0 = theme::surface0();
         let blue = theme::blue();
@@ -352,7 +350,7 @@ impl Workspace {
                 let bve = book_view.clone();
                 let mut nav_counter = 0usize;
                 let mut rows: Vec<AnyElement> = Vec::new();
-                let ws = cx.entity().clone();
+                let _ws = cx.entity().clone();
 
                 // All chapters (flat list with nesting)
                 self.collect_chapter_rows(
@@ -562,7 +560,7 @@ impl Workspace {
                 let drag_loc = loc.clone();
                 let drag_title = ch.title.clone();
                 part_row = part_row.on_drag(
-                    ChapterDrag { loc: drag_loc, title: drag_title.clone() },
+                    ChapterDrag { loc: drag_loc },
                     move |_: &ChapterDrag, _, _, cx| cx.new(|_| DragLabel { text: drag_title.clone() }),
                 );
 
@@ -685,7 +683,7 @@ impl Workspace {
             let drag_loc = loc.clone();
             let drag_title = ch.title.clone();
             row = row.on_drag(
-                ChapterDrag { loc: drag_loc, title: drag_title.clone() },
+                ChapterDrag { loc: drag_loc },
                 move |_: &ChapterDrag, _, _, cx| cx.new(|_| DragLabel { text: drag_title.clone() }),
             );
 
@@ -1070,7 +1068,6 @@ impl Workspace {
 #[derive(Clone)]
 struct ChapterDrag {
     loc: ChapterLoc,
-    title: String,
 }
 
 struct DragLabel {

@@ -7,15 +7,6 @@ use typst::layout::Frame;
 
 actions!(editor, [SaveFile]);
 
-/// Auto-closing bracket pairs for Typst
-const AUTO_PAIRS: &[(char, char)] = &[
-    ('(', ')'),
-    ('[', ']'),
-    ('{', '}'),
-    ('"', '"'),
-    ('$', '$'),
-];
-
 pub struct Editor {
     pub input: Entity<InputState>,
     pages: Vec<Frame>,
@@ -155,7 +146,7 @@ impl Editor {
     pub fn export_pdf(&self, cx: &Context<Self>) -> Option<std::path::PathBuf> {
         use typst::foundations::Smart;
 
-        let source = self.input.read(cx).value().to_string();
+        let _source = self.input.read(cx).value().to_string();
         let world = self.world.lock().unwrap();
 
         let doc = match typst::compile::<typst::layout::PagedDocument>(&*world).output {
@@ -258,7 +249,6 @@ fn byte_offset_to_line_col(source: &str, offset: usize) -> (usize, usize) {
 
 impl Render for Editor {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let surface0 = theme::surface0();
         let mantle = theme::mantle();
 
         if !self.subscribed {

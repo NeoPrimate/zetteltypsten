@@ -25,14 +25,14 @@ fn main() {
             let crust: Hsla    = rgb(0x181926).into();
             let surface0: Hsla = rgb(0x363a4f).into();
             let surface1: Hsla = rgb(0x494d64).into();
-            let surface2: Hsla = rgb(0x5b6078).into();
-            let overlay0: Hsla = rgb(0x6e738d).into();
+            let _surface2: Hsla = rgb(0x5b6078).into();
+            let _overlay0: Hsla = rgb(0x6e738d).into();
             let subtext0: Hsla = rgb(0xa5adcb).into();
             let text: Hsla     = rgb(0xcad3f5).into();
             let rosewater: Hsla = rgb(0xf4dbd6).into();
             let lavender: Hsla = rgb(0xb7bdf8).into();
             let red: Hsla      = rgb(0xed8796).into();
-            let peach: Hsla    = rgb(0xf5a97f).into();
+            let _peach: Hsla    = rgb(0xf5a97f).into();
             let yellow: Hsla   = rgb(0xeed49f).into();
             let green: Hsla    = rgb(0xa6da95).into();
             let teal: Hsla     = rgb(0x8bd5ca).into();
@@ -151,7 +151,7 @@ fn main() {
 
             // Editor highlight theme — gutter background and active line
             {
-                use gpui_component::highlighter::{HighlightTheme, HighlightThemeStyle};
+                use gpui_component::highlighter::HighlightTheme;
                 let mut style = t.highlight_theme.style.clone();
                 style.editor_background = Some(mantle);    // line-number gutter
                 style.editor_foreground = Some(text);

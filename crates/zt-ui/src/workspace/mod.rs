@@ -68,7 +68,6 @@ pub struct NoteTab {
     pub rel_path: RelPath,
     pub title: String,
     pub note_view: Entity<NoteView>,
-    pub editor: Entity<Editor>,
 }
 
 
@@ -236,8 +235,7 @@ impl Workspace {
             .unwrap_or(rel_path)
             .to_string();
 
-        let editor = cx.new(|cx| Editor::new(root_clone.clone(), rel.clone(), source.clone(), window, cx));
-        self.note_tabs.push(NoteTab { rel_path: RelPath::new(rel.clone()), title, note_view, editor });
+        self.note_tabs.push(NoteTab { rel_path: RelPath::new(rel.clone()), title, note_view });
         self.active_note_idx = self.note_tabs.len() - 1;
 
         if let Some(ref file_tree) = self.file_tree {
@@ -260,15 +258,10 @@ impl Workspace {
         });
         self.attach_note_view_handler(&note_view, cx);
 
-        // The editor is stored but not rendered in Notes mode; use a harmless placeholder.
-        let editor = cx.new(|cx| {
-            Editor::new(vault_root, "__new__.typ".to_string(), String::new(), window, cx)
-        });
         self.note_tabs.push(NoteTab {
             rel_path: RelPath::new(String::new()),
             title: "New Note".to_string(),
             note_view,
-            editor,
         });
         self.active_note_idx = self.note_tabs.len() - 1;
         self.active_tab = ActiveTab::Notes;
@@ -297,7 +290,6 @@ impl Workspace {
                     if !rel.is_empty() {
                         let note_id = NoteId::from_path(Path::new(&rel));
                         let info = nv_ref.note_info.clone();
-                        drop(nv_ref);
                         ws.vault_index.lock().unwrap().index_note_compiled(&note_id, &info);
                         if let Some(ref graph_view) = ws.graph_view {
                             graph_view.update(cx, |gv, cx| gv.rebuild(cx));

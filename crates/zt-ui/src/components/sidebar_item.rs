@@ -17,7 +17,7 @@ use gpui::*;
 /// # use zt_ui::components::sidebar_item;
 /// let _ = sidebar_item("my-note.typ", 16.0, true);
 /// ```
-pub fn sidebar_item(label: &str, indent_px: f32, is_active: bool) -> gpui::Div {
+pub fn sidebar_item(_label: &str, indent_px: f32, is_active: bool) -> gpui::Div {
     div()
         .w_full()
         .pl(px(indent_px))

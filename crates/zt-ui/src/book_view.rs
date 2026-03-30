@@ -28,7 +28,7 @@ pub struct BookView {
     pub selected_nav_idx: usize,
     pages: Vec<Frame>,
     link_store: Arc<Mutex<Vec<(Bounds<Pixels>, crate::note_view::LinkTarget)>>>,
-    pending_compile: Option<Task<()>>,
+    _pending_compile: Option<Task<()>>,
     /// Shared vault-wide compiled document.
     vault_doc: Arc<Mutex<zt_typst::vault_doc::VaultDocument>>,
 }
@@ -43,7 +43,7 @@ impl BookView {
             selected_nav_idx: 0,
             pages: Vec::new(),
             link_store: Arc::new(Mutex::new(Vec::new())),
-            pending_compile: None,
+            _pending_compile: None,
             vault_doc,
         };
 
@@ -93,7 +93,7 @@ impl Render for BookView {
         let surface0 = theme::surface0();
         let mantle = theme::mantle();
         let crust = theme::crust();
-        let text_color = theme::text();
+        let _text_color = theme::text();
         let blue = theme::blue();
         let subtext = theme::subtext0();
         let selected = self.selected_nav_idx;

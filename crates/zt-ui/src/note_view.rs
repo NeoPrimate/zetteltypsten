@@ -412,8 +412,8 @@ impl Render for NoteView {
         } else {
             let pages = self.pages.clone();
             let link_store = self.link_store.clone();
-            let vault_doc_for_links = self.vault_doc.clone();
-            let note_rel = self.rel_path.clone();
+            let _vault_doc_for_links = self.vault_doc.clone();
+            let _note_rel = self.rel_path.clone();
 
             let pad = 16.0_f32;
             let text_color = theme::text();

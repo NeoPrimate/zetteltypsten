@@ -92,28 +92,6 @@ impl Note {
     }
 }
 
-/// Extract the first `= Heading` from Typst source as the note title.
-/// Strips any trailing `<label>` syntax from the heading.
-fn extract_title(content: &str) -> Option<String> {
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if let Some(heading) = trimmed.strip_prefix("= ") {
-            let title = heading.trim();
-            // Strip trailing <label> if present
-            if let Some(label_start) = title.rfind('<') {
-                if title.ends_with('>') {
-                    let before = title[..label_start].trim();
-                    if !before.is_empty() {
-                        return Some(before.to_string());
-                    }
-                }
-            }
-            return Some(title.to_string());
-        }
-    }
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -128,28 +106,5 @@ mod tests {
     fn note_id_to_path() {
         let id = NoteId("daily/2025-01-01".into());
         assert_eq!(id.to_path(), PathBuf::from("daily/2025-01-01.typ"));
-    }
-
-    #[test]
-    fn extract_title_from_content() {
-        let content = "#import \"_zettel.typ\": *\n\n= My Research Note\n\nSome content.";
-        assert_eq!(extract_title(content), Some("My Research Note".into()));
-    }
-
-    #[test]
-    fn extract_title_missing() {
-        assert_eq!(extract_title("Just some text"), None);
-    }
-
-    #[test]
-    fn extract_title_strips_label() {
-        let content = "= My Note <my-label>\n\nSome content.";
-        assert_eq!(extract_title(content), Some("My Note".into()));
-    }
-
-    #[test]
-    fn extract_title_no_label() {
-        let content = "= Plain Title\n\nContent.";
-        assert_eq!(extract_title(content), Some("Plain Title".into()));
     }
 }

@@ -5,7 +5,7 @@
 //! the content area.
 
 use super::Workspace;
-use crate::{file_ops, theme, utils::LogErr};
+use crate::theme;
 use gpui::*;
 
 impl Workspace {

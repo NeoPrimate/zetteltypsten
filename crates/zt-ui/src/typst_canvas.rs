@@ -5,7 +5,7 @@
 //! exhaustively — the compiler enforces correctness when Typst adds new variants.
 
 use gpui::*;
-use typst::layout::{Abs, Frame, FrameItem, GroupItem, Point as TypstPoint, Size as TypstSize};
+use typst::layout::{Frame, FrameItem, GroupItem, Size as TypstSize};
 use typst::text::TextItem;
 use typst::visualize::{Geometry, Shape, Paint as TypstPaint, Curve, CurveItem};
 
@@ -31,18 +31,6 @@ struct RenderState {
 }
 
 impl RenderState {
-    fn new() -> Self {
-        Self {
-            offset_x: 0.0,
-            offset_y: 0.0,
-            scale_x: 1.0,
-            scale_y: 1.0,
-            viewport_top: -10000.0,
-            viewport_bottom: 10000.0,
-            text_color_override: None,
-        }
-    }
-
     fn translate(&self, x: f32, y: f32) -> Self {
         Self {
             offset_x: self.offset_x + x * self.scale_x,
@@ -61,24 +49,6 @@ impl RenderState {
         }
     }
 
-    /// Check if a vertical position is potentially visible.
-    fn is_visible(&self, y: f32, height: f32) -> bool {
-        let item_top = self.offset_y + y;
-        let item_bottom = item_top + height;
-        item_bottom > self.viewport_top && item_top < self.viewport_bottom
-    }
-
-    /// Convert a Typst point to GPUI pixels.
-    fn to_px(&self, pt: TypstPoint) -> Point<Pixels> {
-        point(
-            px(self.offset_x + pt.x.to_pt() as f32 * PT_TO_PX * self.scale_x),
-            px(self.offset_y + pt.y.to_pt() as f32 * PT_TO_PX * self.scale_y),
-        )
-    }
-
-    fn abs_to_px(&self, v: Abs) -> Pixels {
-        px(v.to_pt() as f32 * PT_TO_PX * self.scale_x)
-    }
 }
 
 /// Convert a Typst Paint to a GPUI Hsla color.
@@ -638,18 +608,10 @@ fn render_image_placeholder(
 
 /// A GPUI element that renders a Typst PagedDocument.
 /// Displays pages vertically with gaps and shadows (PDF preview mode).
-pub struct TypstDocumentView {
-    pages: Vec<Frame>,
-    scroll_offset: f32,
-    links: Vec<LinkRegion>,
-}
+pub struct TypstDocumentView {}
 
 impl TypstDocumentView {
-    pub fn new(pages: Vec<Frame>) -> Self {
-        Self {
-            pages,
-            scroll_offset: 0.0,
-            links: Vec::new(),
-        }
+    pub fn new(_pages: Vec<Frame>) -> Self {
+        Self {}
     }
 }
