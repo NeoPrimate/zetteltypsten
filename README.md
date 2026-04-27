@@ -14,21 +14,32 @@
 
 <p align="center"><em>Free, Open Source, Privacy First.</em></p>
 
-## Features
+# Features
 
-### 🔗 Zettelsten
+## ✏️ PDF Annotation
+
+Store, view, highlight and annotate your PDFs. Extract your highlights and annotations. Inspired by [Zotero](https://www.zotero.org)
+
+- _Ingestion_: DOI-based lookup (Crossref/OpenAlex) & automatic BibTeX generation
+- _Storage_: Local file system "Vault" (Optionally Content-Addressable)
+- _Viewer_: High-fidelity rendering with annotation overlay layer
+- _Knowledge Capture_: Color-coded highlighting & text notes
+- _Extraction_: One-click export to Markdown or structured BibTeX
+- _Discovery_: Full-text search across all library content
+
+## 🔗 Zettelsten
 
 Write notes, create links between your notes and visualize them as a graph. Inspired by [Logseq](https://logseq.com) and [Obsidian](https://obsidian.md)
 
-### 📚 Book
+## 📚 Book
 
 Assemble your book from your notes. Inspired by [mdBook](https://rust-lang.github.io/mdBook/)
 
-### 📑 PDF
+## 📄 PDF Writing
 
 Assemble your PDFs from your notes. Inspired by [Typst WebApp](https://typst.app)
 
-## Goals
+# Goals
 
 - Stay as close to native Typst syntax as possible
 - Privacy first — all data stays local, no telemetry
