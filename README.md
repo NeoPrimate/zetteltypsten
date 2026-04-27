@@ -65,7 +65,8 @@ Drop papers into your vault, highlight, annotate, extract. Inspired by [Zotero](
 | Components   | [gpui-component](https://longbridge.github.io/gpui-component/) |
 | Compiler     | [`typst`](https://github.com/typst/typst) 0.14                 |
 | Renderer     | Custom Frame Painter — Typst `Frame` → GPUI Canvas             |
-| Database     | SQLite (`rusqlite`) with FTS5                                  |
+| Database     | [Limbo](https://github.com/tursodatabase/limbo)                |
+| Text Search  | [Tantivy](https://github.com/quickwit-oss/tantivy)             |
 | File watcher | `notify` + `walkdir`                                           |
 
 ### The Frame Painter
@@ -109,7 +110,7 @@ crates/
   zt-core/     Domain types
   zt-editor/   Text buffer, cursor, history
   zt-index/    Vault indexer, link graph
-  zt-db/       SQLite layer
+  zt-db/       Limbo + Tantivy layer
   zt-fs/       Scanner + watcher
   zt-book/     Book builder
 ```
