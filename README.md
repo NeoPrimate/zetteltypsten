@@ -32,7 +32,7 @@ Zetteltypsten unifies them — on top of Typst, the modern successor to LaTeX �
 
 ### 🔗 Linked Notes
 
-A Zettelkasten built on real Typst syntax. Use `@ref` and `<label>` to link notes, `#metadata()` to tag them, and watch the knowledge graph emerge.
+A Zettelkasten built on real Typst syntax. Use `@ref` and `<label>` to link notes, `#metadata()` to tag them, and watch the knowledge graph emerge. Inspired by [Logseq](https://logseq.com) and [Obsidian](https://obsidian.md).
 
 - Native cross-note references — no custom DSL
 - Live force-directed graph view
@@ -44,7 +44,7 @@ Assemble notes into a published book — table of contents, chapters, parts. Ins
 
 ### 📄 PDF Authoring
 
-Compose PDFs from the same notes you already write. Side-by-side preview with sub-frame incremental recompilation — typing feels instant.
+Compose PDFs from the same notes you already write. Side-by-side preview with sub-frame incremental recompilation — typing feels instant. Inspired by the [Typst Web App](https://typst.app).
 
 ### ✏️ PDF Annotation
 
